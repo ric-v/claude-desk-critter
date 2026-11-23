@@ -1,0 +1,5 @@
+{
+  "name": "desk-critter",
+  "owner": { "name": "ric-v" },
+  "plugins": [{ "name": "desk-critter", "source": "./" }]
+}
