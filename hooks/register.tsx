@@ -3,7 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
 import type { Prop } from './critter-art'
-import { PICTURE_SIZES, SIZES, Walker, bodyRows, encode, picture, spriteCols, stripRows } from './terminal'
+import { PICTURE_SIZES, SIZES, Walker, bodyRows, picture, render, spriteCols, stripRows } from './terminal'
 import type { Look } from './terminal'
 import type { WalkInput } from './terminal'
 
@@ -379,16 +379,23 @@ async function readScene($: EngineInterface, now: number, laneCols: number): Pro
 const captionOf = (sc: Scene, shown = sc.size) =>
   `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${shown !== sc.size ? ` · size ${shown}` : ''}`
 
+/** What the walk needs to know of a look: its speed, its width, and how far its props reach when it faces left. */
+const fit = (look: Look) => ({
+  scale: look.scale,
+  sprite: spriteCols(look),
+  reach: Math.ceil((look.art.w - 2 * look.art.mid) * look.scale),
+})
+
 const toBase64 = (bytes: Uint8Array) => (bytes as unknown as { toBase64: () => string }).toBase64()
 
 /** The frame: the Raster's cells, or the Image's RGBA, base64; `data` tells one frame from the next. */
 function frameOf(sc: Scene, rows: number, look: Look, pic: boolean): { data: string; width: number; height: number } {
-  const px = look.paint(walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat))
+  const pose = walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat)
   if (pic) {
-    const { rgba, width, height } = picture(px, sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
+    const { rgba, width, height } = picture(look.paint(pose), sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
     return { data: toBase64(rgba), width, height }
   }
-  const cells = encode(px, sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
+  const cells = render(look, pose, sc.input.laneCols, rows, walker.x, walker.facing < 0)
   return { data: toBase64(new Uint8Array(cells.buffer)), width: 0, height: 0 }
 }
 
@@ -427,7 +434,7 @@ async function tick($: EngineInterface) {
   const now = strip
   if (now === null) return stopTick()
   const base = await sceneNow($, now.laneCols)
-  const sc = { ...base, input: { ...base.input, scale: now.look.scale, sprite: spriteCols(now.look) } }
+  const sc = { ...base, input: { ...base.input, ...fit(now.look) } }
   walker.step(sc.input)
   if (captionOf(sc, now.shown) !== now.caption || sc.size !== now.size) {
     // The caption and the size set the layout, so a change to either is a new render rather than a blit.
@@ -650,7 +657,7 @@ export const register: Register = on => {
       const { shown, look, caption, captionCols, laneLeft, laneCols } = pick
       if (room >= bodyRows(look)) {
         const rows = Math.min(stripRows(look), room)
-        const sc = { ...probe, input: { ...probe.input, laneCols, scale: look.scale, sprite: spriteCols(look) } }
+        const sc = { ...probe, input: { ...probe.input, laneCols, ...fit(look) } }
         walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
         strip = { requestId: e.requestId, laneLeft, laneCols, rows, look, shown, size: probe.size, caption, pic }
         const frame = frameOf(sc, rows, look, pic)

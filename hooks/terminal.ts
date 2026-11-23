@@ -1,7 +1,7 @@
 // The critter in a terminal: the painted grid turned into half-block cells, and the walk.
 // Pure: no `$`, so all of it is tested directly.
 
-import { ART, MINI, PALETTE, paintMini } from './critter-art'
+import { ART, MINI, PALETTE, miniLift, paintMini } from './critter-art'
 import type { Arm, Art, Eyes, Pose, Prop } from './critter-art'
 
 /** The terminal's own colour, for a half with nothing painted on it. */
@@ -14,12 +14,18 @@ export const BODY_ROWS = 5
 export const SPRITE_COLS = ART.w
 
 /** How a size draws: which painting, at how many columns (and half-rows) per pixel. */
-export type Look = { art: Art; scale: number; paint: (pose: Pose) => Uint8Array }
+export type Look = {
+  art: Art
+  scale: number
+  paint: (pose: Pose, layer?: 'all' | 'ground' | 'body') => Uint8Array
+  /** Pixels off the ground, moved by whole cells after painting so the critter keeps its shape. */
+  lift?: (pose: Pose) => number
+}
 /**
  * The four sizes `/critter size` picks from: one critter, the hand-drawn mini one, at 1, 1.5, 2 and
  * 2.5 times, so every size has the same face, props and animations.
  */
-export const SIZES: readonly Look[] = [1, 1.5, 2, 2.5].map(scale => ({ art: MINI, scale, paint: paintMini }))
+export const SIZES: readonly Look[] = [1, 1.5, 2, 2.5].map(scale => ({ art: MINI, scale, paint: paintMini, lift: miniLift }))
 /** Where the terminal shows real pictures: the same critter, drawn crisp at every scale. */
 export const PICTURE_SIZES: readonly Look[] = SIZES
 /** How wide, how tall, and how tall its body is, for a look. */
@@ -58,36 +64,78 @@ function sample(px: Uint8Array, art: Art, x0: number, x1: number, y0: number, y1
 const colorOf = (v: number) => (v === 0 ? DEFAULT_COLOR : PALETTE[v]!)
 
 /**
- * The bottom `rows` cell rows of a painting, its left edge at lane column `x`, as Raster cells:
- * `[codepoint, fg, bg]` per cell, ▀ with the top half as fg and the bottom half as bg (▄ when only the bottom is painted). At `scale`
- * each pixel takes that many columns and half-rows. Mirrored about the body, so it keeps its columns.
+ * The bottom `rows` cell rows of a painting, its left edge at lane column `x`, as palette indexes, two
+ * per cell row (top half, then bottom half): `laneCols` x `rows * 2`. At `scale` each pixel takes that
+ * many columns and half-rows. Mirrored about the body, so it keeps its columns.
  */
-export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint32Array {
-  const out = new Uint32Array(Math.max(0, laneCols) * Math.max(0, rows) * 3)
+export function grid(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint8Array {
+  const halves = Math.max(0, rows) * 2
+  const cols = Math.max(0, laneCols)
+  const out = new Uint8Array(cols * halves)
   const mirror = 2 * art.mid
-  // Pixel-space rows for one half of a cell row, counted up from the strip's bottom edge.
-  const ys = (row: number, half: number): [number, number] => {
-    const fromBottom = (rows - row) * 2 - half
-    return [art.h - fromBottom / scale, art.h - (fromBottom - 1) / scale]
-  }
-  for (let row = 0; row < rows; row++) {
-    const top = ys(row, 0)
-    const bottom = ys(row, 1)
-    for (let col = 0; col < laneCols; col++) {
+  for (let h = 0; h < halves; h++) {
+    const fromBottom = halves - h
+    const y0 = art.h - fromBottom / scale
+    const y1 = art.h - (fromBottom - 1) / scale
+    for (let col = 0; col < cols; col++) {
       const a = (col - x) / scale
       const b = (col - x + 1) / scale
       const [x0, x1] = flip ? [mirror - b, mirror - a] : [a, b]
-      const hi = sample(px, art, x0, x1, ...top)
-      const lo = sample(px, art, x0, x1, ...bottom)
-      // The glyph's ink is always a painted colour: an empty top half is the terminal's background
-      // under ▄, never its text colour on top of ▀ (which most terminals draw white).
-      const cellOf: [number, number, number] =
-        hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : hi === 0 ? [LOWER_HALF, colorOf(lo), DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)]
-      out.set(cellOf, (row * laneCols + col) * 3)
+      out[h * cols + col] = sample(px, art, x0, x1, y0, y1)
     }
   }
   return out
 }
+
+/**
+ * Half-row palette indexes as Raster cells: `[codepoint, fg, bg]` per cell, ▀ with the top half as fg
+ * and the bottom half as bg, ▄ when only the bottom is painted.
+ */
+export function cellsOf(g: Uint8Array, laneCols: number, rows: number): Uint32Array {
+  const out = new Uint32Array(Math.max(0, laneCols) * Math.max(0, rows) * 3)
+  for (let row = 0; row < rows; row++)
+    for (let col = 0; col < laneCols; col++) {
+      const hi = g[row * 2 * laneCols + col]!
+      const lo = g[(row * 2 + 1) * laneCols + col]!
+      // The glyph's ink is always a painted colour: an empty top half is the terminal's background
+      // under ▄, never its text colour on top of ▀ (which most terminals draw white).
+      const cell: [number, number, number] =
+        hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : hi === 0 ? [LOWER_HALF, colorOf(lo), DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)]
+      out.set(cell, (row * laneCols + col) * 3)
+    }
+  return out
+}
+
+/** A painting as Raster cells: `grid`, then `cellsOf`. */
+export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint32Array {
+  return cellsOf(grid(px, laneCols, rows, x, flip, scale, art), laneCols, rows)
+}
+
+/**
+ * A pose drawn for the terminal, as half-row palette indexes. A look with a lift paints the ground and
+ * the critter apart: the critter is scaled where it stands and then moved up by whole half-rows, so a
+ * hop or a bob never reshapes it, however the pixels fall on the cells.
+ */
+export function renderGrid(look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): Uint8Array {
+  if (look.lift === undefined) return grid(look.paint(pose), laneCols, rows, x, flip, look.scale, look.art)
+  const ground = grid(look.paint(pose, 'ground'), laneCols, rows, x, flip, look.scale, look.art)
+  const body = grid(look.paint(pose, 'body'), laneCols, rows, x, flip, look.scale, look.art)
+  const k = Math.round(look.lift(pose) * look.scale)
+  const halves = rows * 2
+  for (let h = 0; h < halves; h++) {
+    const from = h + k
+    if (from >= halves) continue
+    for (let c = 0; c < laneCols; c++) {
+      const v = body[from * laneCols + c]!
+      if (v !== 0) ground[h * laneCols + c] = v
+    }
+  }
+  return ground
+}
+
+/** A pose drawn for the terminal, as Raster cells. */
+export const render = (look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): Uint32Array =>
+  cellsOf(renderGrid(look, pose, laneCols, rows, x, flip), laneCols, rows)
 
 /** Image pixels to a painted pixel; fewer when the lane is so wide the picture would pass 2048 across. */
 const PICTURE_PX = 3
@@ -134,6 +182,8 @@ export type WalkInput = {
   sprite?: number
   /** Columns per pixel, for the walking speed; 1 when left out. */
   scale?: number
+  /** How far its props reach past its left edge when it faces left, in columns; 0 when left out. */
+  reach?: number
 }
 
 const WALK = 0.5 // columns a tick
@@ -206,6 +256,11 @@ export class Walker {
     const scale = input.scale ?? 1
     const right = Math.max(0, laneCols - (input.sprite ?? SPRITE_COLS))
     this.settle(input)
+    const zooming = input.zoom || input.trick === 'zoomies'
+    if (input.busy || (input.trick !== 'none' && !zooming) || input.reminder !== 'none') {
+      // At work, it faces the side with room for its props: right, unless it is far over and has the room on its left.
+      this.facing = this.x >= (input.reach ?? 0) && this.x > right / 2 ? -1 : 1
+    }
     if (this.sleeping || input.busy || now < this.petUntil) return
     const zoom = input.zoom || input.trick === 'zoomies'
     if (input.trick !== 'none' && !zoom) return

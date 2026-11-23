@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { ART, C, MINI, PALETTE, paint, paintMini } from './critter-art'
 import type { Pose } from './critter-art'
-import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, spriteCols, stripRows } from './terminal'
+import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, renderGrid, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -122,10 +122,10 @@ test('every size is the same critter, at 1, 1.5, 2 and 2.5 times', () => {
   expect(SIZES.map(look => look.scale)).toEqual([1, 1.5, 2, 2.5])
   for (const look of SIZES) expect([look.art, look.paint]).toEqual([MINI, paintMini])
   expect(SIZES.map(look => [spriteCols(look), stripRows(look), bodyRows(look)])).toEqual([
-    [26, 7, 4],
-    [39, 11, 6],
-    [52, 14, 8],
-    [65, 18, 10],
+    [32, 7, 4],
+    [48, 11, 6],
+    [64, 14, 8],
+    [80, 18, 10],
   ])
 })
 
@@ -151,8 +151,8 @@ test('flip keeps the mini body in place', () => {
 test('a small critter fits its lane', () => {
   const w = new Walker(1)
   w.x = 50
-  w.step({ ...IN, laneCols: 30, sprite: spriteCols(SIZES[0]!) })
-  expect(w.x).toBeLessThanOrEqual(30 - spriteCols(SIZES[0]!))
+  w.step({ ...IN, laneCols: 40, sprite: spriteCols(SIZES[0]!) })
+  expect(w.x).toBeLessThanOrEqual(40 - spriteCols(SIZES[0]!))
 })
 
 test('a cell with only its bottom half painted is a lower half block on the terminal background', () => {
@@ -208,7 +208,7 @@ test('a picture draws the same critter as the text', () => {
 test('facing left keeps a prop whole', () => {
   const look = SIZES[0]!
   const painted = (flip: boolean) => {
-    const cells = encode(look.paint({ ...IDLE, prop: 'type', arm: 'holding' }), 60, stripRows(look), 10, flip, 1, look.art)
+    const cells = encode(look.paint({ ...IDLE, prop: 'type', arm: 'holding' }), 60, stripRows(look), 20, flip, 1, look.art)
     let n = 0
     for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) n++
     return n
@@ -229,4 +229,32 @@ test('it is still when it has not moved for a moment', () => {
   const w = new Walker(1)
   for (let i = 0; i < 10; i++) w.step({ ...IN, now: IN.now + i * 125, busy: true })
   expect(w.pose({ ...IN, now: IN.now + 1250 }, 'none', 0, false, 0).still).toBe(true)
+})
+
+test('a hop moves the whole critter by whole cells, so it keeps its shape at any size', () => {
+  for (const look of SIZES) {
+    const rows = stripRows(look)
+    const cols = spriteCols(look)
+    const g0 = renderGrid(look, { ...IDLE }, cols, rows, 0, false)
+    const g1 = renderGrid(look, { ...IDLE, hop: 1 }, cols, rows, 0, false)
+    const k = Math.round(look.scale)
+    const clay = (g: Uint8Array, shift: number) => {
+      const at: string[] = []
+      for (let h = 0; h < rows * 2; h++) for (let c = 0; c < cols; c++) if (g[h * cols + c] === C.CLAY) at.push(`${c},${h + shift}`)
+      return at.join(' ')
+    }
+    expect([look.scale, clay(g1, k)]).toEqual([look.scale, clay(g0, 0)])
+  }
+})
+
+test('at work it turns to face the side with room for its props', () => {
+  const near = new Walker(1)
+  near.x = 5
+  near.facing = -1
+  near.step({ ...IN, busy: true, sprite: 32, reach: 12 })
+  expect(near.facing).toBe(1)
+  const far = new Walker(1)
+  far.x = 40
+  far.step({ ...IN, busy: true, sprite: 32, reach: 12 })
+  expect(far.facing).toBe(-1)
 })

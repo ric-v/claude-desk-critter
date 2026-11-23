@@ -14,10 +14,10 @@ export type Art = { col0: number; row0: number; w: number; h: number; mid: numbe
 export const ART = { col0: -6, row0: -10, w: 30, h: 20, mid: 12.5, bodyFrom: 6, bodyTo: 18, bodyPx: 10 } as const
 /**
  * The mini critter, drawn by hand in the mascot's style: a flat 8 x 6 clay block, square eyes, 2 x 2
- * arms on its sides and four thin legs, with room for hats and props. The canvas reaches as
- * far left of the body as right of it, so a prop stays whole when it turns to walk the other way.
+ * arms on its sides and four thin legs. Its props stand beside it, 16 pixels to its right; facing left
+ * they mirror to its left, and at work it turns to face whichever side has the room.
  */
-export const MINI = { col0: -7, row0: -6, w: 26, h: 14, mid: 13, bodyFrom: 7, bodyTo: 18, bodyPx: 8 } as const
+export const MINI = { col0: -4, row0: -6, w: 32, h: 14, mid: 10, bodyFrom: 4, bodyTo: 15, bodyPx: 8 } as const
 
 const rgb = (r: number, g: number, b: number) => (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)
 
@@ -388,63 +388,68 @@ export function paint(pose: Pose): Uint8Array {
 // smallest size is drawn by hand, pixel by pixel: grid x 0..11 is the body, grid y 0..5 the body
 // and 6..7 the legs. Hats and props sit around it, and every action has a few frames of its own.
 
-/** Paint the mini critter, facing right: MINI.w x MINI.h palette indexes, row-major. */
-export function paintMini(p: Pose): Uint8Array {
+/**
+ * How many pixels the critter is up off the ground: a hop, or the bob of a dance. The terminal moves
+ * the drawn critter by whole cells for this rather than painting it higher, so it keeps its shape.
+ */
+export function miniLift(p: Pose): number {
+  const bob = p.prop === 'dance' ? Math.floor(p.t * 3) % 2 : 0
+  return p.hop + bob
+}
+
+/**
+ * Paint the mini critter, facing right: MINI.w x MINI.h palette indexes, row-major.
+ * `layer` 'ground' is what stays on the ground (its shadow, the laptop, the book stand, the globe),
+ * 'body' the critter and what it holds with no lift, 'all' both with the lift painted in.
+ */
+export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Uint8Array {
   const px = new Uint8Array(MINI.w * MINI.h)
   // Frame `n` of an animation of `count` frames playing `rate` frames a second.
   const frame = (count: number, rate = 2) => Math.floor(p.t * rate) % count
   const enter = p.enter ?? 1
   // Halfway into a change the puff clears and the new prop is there.
   const prop: Prop = enter < 0.5 && PUFF_AT[p.prop] !== undefined ? 'none' : p.prop
-  let lift = p.hop as number
-  if (prop === 'web' || prop === 'dance') lift += frame(2) // it bobs on its cloud, and to the beat
-  // Breathing: standing still, the body sinks a pixel for half a second in every three.
-  const breath = p.still && prop !== 'web' && p.t % 3 >= 2.5 ? 1 : 0
-  let dy = 0 // how far the body, face and hat sit below where they stand
-  const set = (gx: number, gy: number, color: number, ground = false) => {
-    const r = gy + (ground ? 0 : dy - lift) - MINI.row0
+  const lift = layer === 'all' ? miniLift(p) : 0
+  // Whether what is drawn now stands on the ground (and stays there when it hops) or is the critter's.
+  let grounded = false
+  const set = (gx: number, gy: number, color: number) => {
+    if (layer === 'ground' ? !grounded : layer === 'body' && grounded) return
+    const r = gy - (grounded ? 0 : lift) - MINI.row0
     const c = gx - MINI.col0
     if (r >= 0 && r < MINI.h && c >= 0 && c < MINI.w) px[r * MINI.w + c] = color
   }
-  const isEmpty = (gx: number, gy: number) => {
-    const r = gy + dy - lift - MINI.row0
-    const c = gx - MINI.col0
-    return r < 0 || r >= MINI.h || c < 0 || c >= MINI.w || px[r * MINI.w + c] === 0
-  }
-  const dot = (gx: number, gy: number, color: number) => set(gx, gy, color)
+  const dot = set
   const row = (x0: number, x1: number, gy: number, color: number) => {
     for (let x = x0; x <= x1; x++) dot(x, gy, color)
+  }
+  const col = (gx: number, y0: number, y1: number, color: number) => {
+    for (let y = y0; y <= y1; y++) dot(gx, y, color)
   }
   /** Rows of a little picture, top row at `gy`: each character a pixel, looked up in `key`; '.' is nothing. */
   const sprite = (gx: number, gy: number, rows: string[], key: Record<string, number>) => {
     rows.forEach((line, dy) => [...line].forEach((ch, dx) => key[ch] !== undefined && dot(gx + dx, gy + dy, key[ch]!)))
   }
   const heart = (gx: number, gy: number) => sprite(gx, gy, ['r.r', 'rrr', '.r.'], { r: C.ROSE })
+  const shadow = (x0: number, x1: number) => {
+    grounded = true
+    row(x0, x1, 7, C.SHADOW)
+    grounded = false
+  }
 
-  // Writing: the pencil's place on the page, which its eyes follow.
-  const wf = Math.floor(p.t * 6) % 16
-  const writeLine = wf < 6 ? 0 : wf < 12 ? 1 : 2 // 2: the page is full, a fresh one comes
-  const writeAt = writeLine === 2 ? 0 : Math.min(5, wf % 6)
-
-  // Where its eyes look: down at a page, along a book's lines, up at a thought, at the work, or about.
+  // Where its eyes look: at the work beside it, up at a thought, or about when idle.
   let lookX = 0
   let lookY = 0
-  if (prop === 'type') [lookX, lookY] = [writeAt >= 3 ? 1 : 0, 1]
-  else if (prop === 'read') [lookX, lookY] = [frame(4, 4) < 2 ? 0 : 1, 1]
-  else if (prop === 'think') [lookX, lookY] = [-1, -1]
-  else if (['shell', 'search', 'water', 'coffee', 'sparkler'].includes(prop)) lookX = 1
-  else if (prop === 'web') [lookX, lookY] = [1, -1]
+  if (['type', 'shell', 'search', 'web', 'water', 'coffee', 'sparkler'].includes(prop)) lookX = 1
+  else if (prop === 'think') [lookX, lookY] = [1, -1]
   else if (prop === 'none' && p.still) lookX = p.t % 7 >= 6.3 ? 1 : p.t % 7 >= 5.6 ? -1 : 0
 
-  // On the ground: its shadow, or the web cloud in its place, its puffs rolling.
-  if (prop === 'web') {
-    for (let x = -2; x <= 13; x++) set(x, 7, x === -2 || x === 13 ? C.STONE : C.PAPER, true)
-    for (let x = -1; x <= 12; x++) set(x, 6, x === -1 || x === 12 ? C.STONE : C.PAPER, true)
-    for (const x of frame(2, 3) ? [0, 3, 4, 7, 8, 11] : [1, 2, 5, 6, 9, 10]) set(x, 5, C.PAPER, true)
-    // wind streaming past behind it
-    const w = frame(3, 6)
-    for (const [i, y] of [4, 6].entries()) for (let x = -6 + ((w + i) % 3); x <= -4 + ((w + i) % 3) - i; x++) set(x, y, C.STONE, true)
-  } else for (let x = 0; x <= 11; x++) set(x, 7, C.SHADOW, true)
+  // Under its feet: its shadow, or a dance floor lighting up.
+  if (prop === 'dance') {
+    grounded = true
+    const tiles = [C.ROSE, C.GOLD, C.BLUE, C.LEAF]
+    for (let x = -2; x <= 13; x++) dot(x, 7, tiles[(Math.floor((x + 2) / 2) + frame(4, 4)) % 4]!)
+    grounded = false
+  } else shadow(0, 11)
 
   // Behind it: the rain cloud.
   if (prop === 'sad') {
@@ -453,23 +458,16 @@ export function paintMini(p: Pose): Uint8Array {
     for (const [i, x] of [3, 6, 8].entries()) dot(x, -3 + ((f + i) % 3), C.BLUE)
   }
 
-  // Four thin legs: all down standing still; walking, one pair lifts, then the other.
-  // Tucked up on the cloud; they stay put when it breathes.
-  if (prop !== 'web') {
-    const step = p.dancing ? frame(2, 5) : p.stride
-    for (const x of [2, 4, 7, 9]) {
-      dot(x, 6, C.CLAY)
-      const lifted = !p.still && (step === 0 ? x === 4 || x === 9 : x === 2 || x === 7)
-      if (!lifted) dot(x, 7, C.CLAY)
-    }
+  // Four thin legs: all down standing still; walking or dancing, one pair lifts, then the other.
+  const step = p.dancing ? frame(2, 3) : p.stride
+  for (const x of [2, 4, 7, 9]) {
+    dot(x, 6, C.CLAY)
+    const lifted = (p.dancing || !p.still) && (step === 0 ? x === 4 || x === 9 : x === 2 || x === 7)
+    if (!lifted) dot(x, 7, C.CLAY)
   }
 
-  // The body: one flat block of clay, with a 2 x 2 arm on each side.
-  dy = breath
+  // The body: one flat block of clay, never covered.
   for (let y = 0; y <= 5; y++) row(2, 9, y, C.CLAY)
-  // the near arm: tapping along when it writes or runs a command
-  const nearDown = (prop === 'type' || prop === 'shell') && frame(2, 6) ? 1 : 0
-  sprite(0, 2 + nearDown, ['cc', 'cc'], { c: C.CLAY })
 
   // Eyes: one square each, looking where it looks; a line shut; ^ ^ when happy.
   const eyes: Eyes = enter < 0.15 && p.eyes === 'open' ? 'blink' : p.eyes
@@ -488,184 +486,283 @@ export function paintMini(p: Pose): Uint8Array {
     else if (eyes !== 'blink') dot(x, y, C.INK)
   }
 
-  // The far arm: resting, up to wave, or out to hold something. Props that need it draw their own.
-  const ownArm = ['type', 'shell', 'search', 'read'].includes(prop)
-  if (!ownArm) {
+  // Arms, 2 x 2 on each side. Dancing they swing up in turn; otherwise the far one waves, holds or works.
+  const arm = (x: number, up: boolean) => sprite(x, up ? 0 : 2, ['cc', 'cc'], { c: C.CLAY })
+  const swing = prop === 'dance' ? frame(2, 3) : -1
+  arm(0, swing === 0)
+  const works = ['type', 'shell', 'search', 'read', 'web'].includes(prop)
+  if (prop === 'dance') arm(10, swing === 1)
+  else if (!works) {
     if (p.arm === 'raised' || p.arm === 'wave') {
       const out = p.arm === 'wave' && frame(2, 3) === 1
       sprite(10, 0, ['c', 'c'], { c: C.CLAY })
       sprite(out ? 11 : 10, -2, ['c', 'c'], { c: C.CLAY })
     } else if (p.arm === 'holding') sprite(10, 2, ['ccc', 'ccc'], { c: C.CLAY })
-    else sprite(10, 2, ['cc', 'cc'], { c: C.CLAY })
-  }
-  dy = 0
+    else arm(10, false)
+  } else arm(10, false)
 
   switch (prop) {
     case 'type': {
-      // Writing: a sheet held in front, a pencil running along its lines, a fresh sheet when it's full.
-      dy = breath
-      sprite(2, 3, ['kkkkkkkk', 'kppppppk', 'kppppppk', 'kkkkkkkk'], { k: C.INK, p: C.PAPER })
-      if (writeLine === 2) {
-        if (wf === 12) row(3, 8, 3, C.PAPER) // the old sheet lifting away
-      } else {
-        if (writeLine === 1) row(3, 7, 4, C.CLAY)
-        row(3, 3 + writeAt, 4 + writeLine, C.CLAY)
-        // the pencil: a dark tip on the line, a gold shaft leaning back to its hand
-        const tx = 4 + writeAt
-        const ty = 4 + writeLine
-        dot(tx, ty - 1, C.INK)
-        dot(tx + 1, ty - 2, C.GOLD)
-        dot(tx + 2, ty - 3, C.GOLD)
-        dot(tx + 3, ty - 4, C.ROSE) // the eraser
+      // A laptop on the ground beside it: code types out on its screen line by line, colour by colour,
+      // and scrolls up; the critter's hand taps, and the key under it lights.
+      const f = Math.floor(p.t * 8)
+      grounded = true
+      // screen: a frame round a dark display, a gutter of line numbers down its left
+      row(16, 25, -3, C.STONE)
+      row(16, 25, 4, C.STONE)
+      col(16, -3, 4, C.STONE)
+      col(25, -3, 4, C.STONE)
+      for (let y = -2; y <= 3; y++) row(17, 24, y, C.NIGHT)
+      // the code: each line a keyword then a few tokens, indented, typed a character a frame
+      const len = (n: number) => 3 + ((n * 5) % 4) // 3..6 characters
+      const ind = (n: number) => [0, 1, 2, 1][n % 4]!
+      // twelve lines make a whole pattern; the screen loops through it for as long as it types
+      let cycle = 0
+      for (let n = 0; n < 12; n++) cycle += len(n) + 2
+      const g = f % cycle
+      let at = 0
+      let line = 0
+      while (at + len(line) + 2 <= g) {
+        at += len(line) + 2 // a line, then a beat before the next
+        line++
       }
-      sprite(10, 2, ['cc', 'cc'], { c: C.CLAY })
-      dy = 0
+      const typed = Math.min(len(line), g - at)
+      const starts: number[] = []
+      for (let n = line - 5; n <= line; n++) starts.push(n)
+      starts.forEach((m, r) => {
+        const n = ((m % 12) + 12) % 12
+        const y = -2 + r
+        dot(17, y, C.STONE) // its line number
+        const chars = m === line ? typed : len(n)
+        // a keyword, a space, then a name or a string
+        for (let i = 0; i < chars; i++) {
+          const x = 18 + ind(n) + i
+          if (x > 24 || i === 2) continue
+          dot(x, y, i < 2 ? C.ROSE : n % 3 === 0 ? C.LEAF : C.SKY)
+        }
+        if (m === line && f % 2 === 0) dot(Math.min(24, 18 + ind(n) + chars), y, C.PAPER) // the cursor
+      })
+      // keyboard and base
+      for (let x = 14; x <= 25; x++) dot(x, 5, x % 2 ? C.STONE : C.PAPER)
+      const tap = f % 2 === 0
+      if (tap) dot(14, 5, C.GOLD)
+      row(13, 26, 6, C.STONE)
+      row(13, 26, 7, C.SHADOW)
+      grounded = false
+      // the far hand reaching to the keys, tapping
+      dot(12, 3, C.CLAY)
+      dot(13, 4, C.CLAY)
+      dot(14, tap ? 4 : 3, C.CLAY)
+      break
+    }
+    case 'read': {
+      // A big book open on a stand beside it, reading glasses on; a gold mark runs down its lines,
+      // and when a spread is read a page lifts and sweeps across to the other side.
+      sprite(2, 0, ['ggg..ggg', 'g.gggg.g', 'ggg..ggg'], { g: C.GOLD }) // round glasses, eyes in the middle
+      const cycle = Math.floor(p.t * 8) % 31
+      const spread = Math.floor(p.t * 8 / 31)
+      grounded = true
+      // the stand
+      col(19, 3, 6, C.EMBER)
+      col(20, 3, 6, C.EMBER)
+      row(17, 22, 7, C.EMBER)
+      row(13, 26, 7, C.SHADOW)
+      row(17, 22, 7, C.EMBER)
+      // the book: covers under the pages, a spine down the middle
+      row(13, 26, 3, C.BLUE)
+      for (let y = -1; y <= 2; y++) row(13, 26, y, C.PAPER)
+      col(19, -1, 2, C.STONE)
+      col(20, -1, 2, C.STONE)
+      // lines of text, three to a page, a new spread's after a turn
+      const reading = cycle < 24 ? Math.floor(cycle / 4) : -1 // which of the six lines
+      for (let i = 0; i < 6; i++) {
+        const left = i < 3
+        const y = i % 3
+        const x0 = left ? 14 : 21
+        const w = 3 + ((i + spread) % 3)
+        for (let x = x0; x < x0 + w; x++) dot(x, y, i === reading ? C.EMBER : C.CLAY)
+        if (i === reading) dot(x0 - 1, y, C.GOLD) // the mark where it's reading
+      }
+      // a page turning: up from the right, over the spine, down on the left
+      if (cycle >= 24) {
+        const sweep: [number, number][] = [
+          [24, -1],
+          [22, -2],
+          [21, -3],
+          [19, -4],
+          [17, -3],
+          [16, -2],
+          [14, -1],
+        ]
+        const [x, y] = sweep[cycle - 24]!
+        sprite(x, y, ['pp', 'pp', 'pp', 'pp'], { p: C.PAPER })
+      }
+      grounded = false
+      // its far hand on the book's edge, holding the page
+      dot(12, 2, C.CLAY)
+      break
+    }
+    case 'search': {
+      // A lens held out over a belt: files ride past under it, each one magnified as it goes by;
+      // the one it is after stops, glows and gets a tick.
+      const f = Math.floor(p.t * 8)
+      const SPACE = 5
+      const lens = 15 // the lens's inside, x 15..17, y 3..5
+      grounded = true
+      // the belt, its marks running toward the lens
+      for (let x = 13; x <= 27; x++) dot(x, 7, (x + f) % 3 === 0 ? C.STONE : C.SHADOW)
+      // the files: docs, and every fourth one the folder it is after
+      let match = false
+      for (let k = 0; k < 4; k++) {
+        const x = 27 - ((f + k * SPACE) % (SPACE * 4))
+        const n = Math.floor((f + k * SPACE) / (SPACE * 4)) * 4 + k
+        const isMatch = n % 4 === 3
+        if (x < lens) continue
+        if (isMatch && x >= lens - 4 && x <= lens) match = true // it lingers a moment as it's found
+        if (x <= 17 && x !== lens) continue // passing under the lens, seen only through it
+        if (x === lens) continue
+        if (isMatch) sprite(x, 4, ['gg.', 'ggg', 'ggg'], { g: C.GOLD })
+        else sprite(x, 4, ['pp.', 'pkp', 'ppp'], { p: C.PAPER, k: C.STONE })
+      }
+      grounded = false
+      // the lens: a ring, its glass showing what is under it, a glint; its handle in the critter's hand
+      const under = (() => {
+        for (let k = 0; k < 4; k++) {
+          const x = 27 - ((f + k * SPACE) % (SPACE * 4))
+          const n = Math.floor((f + k * SPACE) / (SPACE * 4)) * 4 + k
+          if (x >= lens - 2 && x <= lens + 2) return n % 4 === 3 ? C.GOLD : C.PAPER
+        }
+        return C.SKY
+      })()
+      sprite(14, 2, ['sssss', 's...s', 's...s', 's...s', 'sssss'], { s: C.STONE })
+      for (let y = 3; y <= 5; y++) row(15, 17, y, under)
+      dot(15, 3, under === C.SKY ? C.PAPER : C.SKY)
+      dot(12, 2, C.CLAY)
+      dot(13, 2, C.STONE)
+      if (match) {
+        sprite(14, -3, ['...l', 'l.l.', '.l..'], { l: C.LEAF }) // a tick
+        dot(19, -2, C.GOLD)
+        dot(13, -1, C.GOLD)
+      } else sprite(15, -3, ['sss', '..s', '.s.', '...', '.s.'], { s: C.SKY })
+      break
+    }
+    case 'web': {
+      // A globe on a stand beside it, turning; packets run out to it along a line and come back.
+      const f = Math.floor(p.t * 6)
+      grounded = true
+      const LAND = ['..gg....g.....', '.gggg..ggg..g.', 'gggg....gg.ggg', '.gg...ggg...gg', '..g..gggg.....', '.....gg....g..', '..............']
+      const SHAPE = ['..xxx..', '.xxxxx.', 'xxxxxxx', 'xxxxxxx', 'xxxxxxx', '.xxxxx.', '..xxx..']
+      for (let y = 0; y < 7; y++)
+        for (let x = 0; x < 7; x++) {
+          if (SHAPE[y]![x] !== 'x') continue
+          const land = LAND[y]![(x + f) % 14] === 'g'
+          dot(20 + x, -1 + y, land ? C.LEAF : C.BLUE)
+        }
+      dot(21, 0, C.PAPER) // a glint
+      dot(23, 6, C.STONE)
+      row(21, 25, 7, C.STONE)
+      // the line out to it, and packets: gold going, sky coming back
+      for (let x = 13; x <= 19; x += 2) dot(x, 2, C.STONE)
+      const g = frame(7, 8)
+      dot(13 + g, 1, C.GOLD)
+      dot(19 - ((g + 3) % 7), 3, C.SKY)
+      grounded = false
+      dot(12, 2, C.CLAY)
+      break
+    }
+    case 'think': {
+      // Bubbles rising to its side into a big one, where gears turn, then dots gather, then a bulb lights.
+      const f = frame(18, 4)
+      dot(12, 0, C.PAPER)
+      sprite(15, -3, ['pp', 'pp'], { p: C.PAPER })
+      sprite(18, -6, ['.pppppppp.', 'pppppppppp', 'pppppppppp', 'pppppppppp', 'pppppppppp', 'pppppppppp', '.pppppppp.'], { p: C.PAPER })
+      if (f < 6) {
+        const turn = Math.floor(p.t * 6) % 2
+        sprite(19, -5, turn ? ['s.s', '.g.', 's.s'] : ['.s.', 'sgs', '.s.'], { s: C.STONE, g: C.GOLD })
+        sprite(22, -3, turn ? ['.s.', 'sgs', '.s.'] : ['s.s', '.g.', 's.s'], { s: C.STONE, g: C.GOLD })
+      } else if (f < 12) {
+        for (let i = 0; i <= Math.min(2, Math.floor((f - 6) / 2)); i++) dot(20 + i * 2, -3, C.INK)
+      } else {
+        sprite(21, -5, ['.g.', 'ggg', 'ggg', '.s.'], { g: C.GOLD, s: C.STONE })
+        if (f % 2) {
+          dot(19, -5, C.GOLD)
+          dot(25, -5, C.GOLD)
+          dot(19, -2, C.GOLD)
+          dot(25, -2, C.GOLD)
+        }
+      }
       break
     }
     case 'shell': {
       // A terminal window: a prompt, a command typed out, its output printing, the lot scrolling up.
-      sprite(13, -1, ['ssssss'], { s: C.STONE })
-      dot(14, -1, C.ROSE)
-      dot(15, -1, C.GOLD)
-      dot(16, -1, C.LEAF)
-      for (let y = 0; y <= 4; y++) {
-        dot(13, y, C.STONE)
-        dot(18, y, C.STONE)
-        row(14, 17, y, C.NIGHT)
+      grounded = true
+      row(14, 21, -2, C.STONE)
+      dot(15, -2, C.ROSE)
+      dot(16, -2, C.GOLD)
+      dot(17, -2, C.LEAF)
+      for (let y = -1; y <= 5; y++) {
+        dot(14, y, C.STONE)
+        dot(21, y, C.STONE)
+        row(15, 20, y, C.NIGHT)
       }
-      row(13, 18, 5, C.STONE)
-      for (let x = 13; x <= 18; x++) set(x, 7, C.SHADOW, true)
+      row(14, 21, 6, C.STONE)
+      row(14, 21, 7, C.SHADOW)
       const step = Math.floor(p.t * 6)
       const cmd = Math.floor(step / 8)
       const at = step % 8
       type Line = { prompt: boolean; len: number; color: number }
       const lines: Line[] = []
-      for (let c = Math.max(0, cmd - 2); c <= cmd; c++) {
+      for (let c = Math.max(0, cmd - 3); c <= cmd; c++) {
         const done = c < cmd ? 8 : at
-        lines.push({ prompt: true, len: Math.min(3, done), color: C.PAPER })
-        if (done >= 4) lines.push({ prompt: false, len: 2 + (c % 3), color: c % 2 ? C.SKY : C.GOLD })
-        if (done >= 5) lines.push({ prompt: false, len: 1 + ((c + 1) % 4), color: C.SKY })
+        lines.push({ prompt: true, len: Math.min(4, done), color: C.PAPER })
+        if (done >= 5) lines.push({ prompt: false, len: 2 + (c % 4), color: c % 2 ? C.SKY : C.GOLD })
+        if (done >= 6) lines.push({ prompt: false, len: 1 + ((c + 1) % 5), color: C.SKY })
       }
-      if (at >= 6) lines.push({ prompt: true, len: 0, color: C.PAPER }) // the next prompt, waiting
-      const shown = lines.slice(-5)
-      shown.forEach((l, y) => {
+      if (at >= 7) lines.push({ prompt: true, len: 0, color: C.PAPER }) // the next prompt, waiting
+      const shown = lines.slice(-7)
+      shown.forEach((l, i) => {
+        const y = -1 + i
         if (l.prompt) {
-          dot(14, y, C.LEAF)
-          if (l.len > 0) row(15, 14 + l.len, y, l.color)
-        } else row(14, 13 + l.len, y, l.color)
+          dot(15, y, C.LEAF)
+          if (l.len > 0) row(16, 15 + l.len, y, l.color)
+        } else row(15, 14 + l.len, y, l.color)
       })
       const last = shown[shown.length - 1]!
-      if (last.prompt && last.len < 3 && frame(2, 4)) dot(15 + last.len, shown.length - 1, C.PAPER)
-      // the far hand on the keys
-      dy = breath
-      sprite(10, 2, ['cc', 'cc'], { c: C.CLAY })
-      dot(12, at < 4 && step % 2 ? 4 : 3, C.CLAY)
-      dy = 0
-      break
-    }
-    case 'read': {
-      // An open book held up in front: two pages of clay lines, its eyes running along them, a page turning.
-      dy = breath
-      const f = frame(12, 6)
-      const page = Math.floor(p.t / 2) % 2
-      sprite(1, 3, ['kkkkkkkkkk', 'kpppkkpppk', 'kpppkkpppk', 'kkkkkkkkkk'], { k: C.INK, p: C.PAPER })
-      // short clay lines of text, a new pair on each page
-      for (const y of [4, 5]) {
-        const long = (y === 4) === (page === 0)
-        row(2, long ? 3 : 2, y, C.CLAY)
-        row(7, long ? 8 : 7, y, C.CLAY)
-      }
-      if (f === 8) sprite(8, 2, ['pp'], { p: C.PAPER })
-      else if (f === 9) sprite(5, 1, ['pp'], { p: C.PAPER })
-      else if (f === 10) sprite(2, 2, ['pp'], { p: C.PAPER })
-      sprite(10, 2, ['cc', 'cc'], { c: C.CLAY })
-      dy = 0
-      break
-    }
-    case 'search': {
-      // A magnifying glass swept on a loop, its glint catching; a "?" overhead, then "!" when it finds it.
-      const path: [number, number][] = [
-        [13, -3],
-        [14, -2],
-        [15, -1],
-        [15, 0],
-        [14, 0],
-        [13, -1],
-        [13, -2],
-        [14, -3],
-      ]
-      const f = frame(8, 4)
-      const [x, y] = path[f]!
-      sprite(x, y, ['.ss.', 'skps', 'skks', '.ss.'], { s: C.STONE, k: C.SKY, p: C.PAPER })
-      dot(x - 1, y + 4, C.STONE)
-      const hand = Math.max(1, Math.min(4, y + 4))
-      sprite(10, 2, ['cc', 'cc'], { c: C.CLAY })
-      dot(12, hand, C.CLAY)
-      if (f < 6) sprite(4, -6 + frame(2, 2), ['sss', '..s', '.s.', '...', '.s.'], { s: C.SKY })
-      else {
-        sprite(5, -6, ['g', 'g', 'g', '.', 'g'], { g: C.GOLD })
-        dot(x + 4, y - 1, C.GOLD) // the find, sparkling
-      }
-      break
-    }
-    case 'web': {
-      // A globe turning up ahead, and packets of data flying to it.
-      const f = frame(4, 4)
-      sprite(14, -6, ['.bb.', 'bbbb', 'bbbb', '.bb.'], { b: C.BLUE })
-      for (let i = 0; i < 4; i++) {
-        if ((i + f) % 4 === 0) dot(14 + i, -5, C.LEAF)
-        if ((i + f) % 4 === 2) dot(14 + i, -4, C.LEAF)
-      }
-      const g = frame(4, 8)
-      const trail: [number, number][] = [
-        [12, 0],
-        [13, -1],
-        [13, -2],
-        [14, -2],
-      ]
-      for (const k of [0, 2]) {
-        const [tx, ty] = trail[(g + k) % 4]!
-        if (isEmpty(tx, ty)) dot(tx, ty, k ? C.SKY : C.GOLD)
-      }
-      break
-    }
-    case 'think': {
-      // Dots rising over its head, one more at a time, then a spark when the idea lands.
-      const f = frame(5, 3)
-      const dots: [number, number][] = [
-        [6, -2],
-        [8, -3],
-        [10, -4],
-      ]
-      dots.slice(0, Math.min(3, f + 1)).forEach(([x, y]) => dot(x, y, C.CLAY))
-      if (f === 4) sprite(11, -6, ['.g.', 'gpg', '.g.'], { g: C.GOLD, p: C.PAPER })
+      if (last.prompt && last.len < 4 && frame(2, 4)) dot(16 + last.len, -1 + shown.length - 1, C.PAPER)
+      grounded = false
+      dot(12, 3, C.CLAY)
+      dot(13, at < 5 && step % 2 ? 4 : 3, C.CLAY)
       break
     }
     case 'ask':
       // A speech bubble with a "!" flashing for attention, rays around it, over a waving arm.
       sprite(2, -6, ['.ssssss.', 'sppkkpps', 'sppkkpps', 'spppppps', 'sppkkpps', '.ssssss.'], { s: C.STONE, p: C.PAPER, k: frame(2, 3) ? C.ROSE : C.INK })
-      // rays pulsing from its top corners, then its bottom ones
       if (frame(2, 6) === 0) for (const x of [0, 11]) dot(x, frame(4, 6) === 0 ? -5 : -2, C.GOLD)
       break
     case 'party': {
-      // A striped party hat with a pom, and confetti falling past.
+      // A striped party hat with a pom, and confetti falling past on both sides.
       sprite(3, -6, ['..rr..', '..gg..', '.bbbb.', '.gggg.', 'bbbbbb'], { r: C.ROSE, g: C.GOLD, b: C.BLUE })
       const tints = [C.GOLD, C.BLUE, C.ROSE, C.LEAF]
-      const f = frame(6, 6)
-      for (let i = 0; i < 6; i++) {
-        const x = [-3, -1, 12, 13, 15, 16][i]!
-        const y = -6 + ((f + i * 2) % 12)
-        if (isEmpty(x, y)) dot(x, y, tints[i % 4]!)
+      const f = frame(12, 6)
+      for (let i = 0; i < 10; i++) {
+        const x = [-3, -1, 13, 15, 17, 19, 21, 23, 25, 27][i]!
+        const y = -6 + ((f + i * 3) % 13)
+        dot(x, y, tints[i % 4]!)
       }
       break
     }
-    case 'dance':
-      // Notes bobbing on either side, one up while the other is down.
-      for (const [i, x] of [-3, 14].entries()) {
-        const y = (frame(2, 3) + i) % 2 === 0 ? -3 : -2
-        sprite(x, y, ['.ii', '.i.', 'ii.'], { i: C.BLUE })
+    case 'dance': {
+      // Notes floating off to its side on a wave, and one to the other side.
+      const f = Math.floor(p.t * 4)
+      const tints = [C.BLUE, C.ROSE, C.GOLD]
+      for (let k = 0; k < 3; k++) {
+        const x = 13 + ((f + k * 4) % 12)
+        const y = -3 + [0, -1, -2, -1][(f + k) % 4]!
+        sprite(x, y, ['.ii', '.i.', 'ii.'], { i: tints[k]! })
       }
+      sprite(-3, -3 + frame(2, 3), ['.ii', '.i.', 'ii.'], { i: C.BLUE })
       break
+    }
     case 'sparkler': {
       // A stick held out, sparks fanning from its tip.
       dot(13, 2, C.STONE)
@@ -680,10 +777,10 @@ export function paintMini(p: Pose): Uint8Array {
       break
     }
     case 'nap': {
-      // Z's, big to small, drifting up.
+      // Z's, big to small, drifting up and away.
       const f = frame(3, 2)
-      sprite(11, -1 - f, ['zz', '.z', 'zz'], { z: C.SKY })
-      sprite(13, -4 - f, ['zzz', '.z.', 'zzz'], { z: C.SKY })
+      sprite(11 + f, -1 - f, ['zz', '.z', 'zz'], { z: C.SKY })
+      sprite(14 + f, -4 - f, ['zzz', '.z.', 'zzz'], { z: C.SKY })
       break
     }
     case 'zoomies':
@@ -731,7 +828,6 @@ export function paintMini(p: Pose): Uint8Array {
   }
 
   // The hat, set aside for the party hat and the speech bubble.
-  dy = breath
   if (prop !== 'party' && prop !== 'ask') {
     switch (p.hat) {
       case 1: // beanie
@@ -760,9 +856,8 @@ export function paintMini(p: Pose): Uint8Array {
         break
     }
   }
-  dy = 0
 
-  // White things get a stone edge where they meet the ground, so they hold their shape on a light terminal too.
+  // White things get a stone edge where they meet nothing, so they hold their shape on a light terminal too.
   const edge: number[] = []
   for (let r = 0; r < MINI.h; r++)
     for (let c = 0; c < MINI.w; c++) {
@@ -776,17 +871,17 @@ export function paintMini(p: Pose): Uint8Array {
 
 /** Where a prop appears, for the puff it arrives and leaves in; props with none (hearts, for a pet) just appear. */
 const PUFF_AT: Partial<Record<Prop, [number, number]>> = {
-  type: [5, 4],
-  shell: [15, 2],
-  search: [15, 0],
+  type: [20, 1],
+  shell: [17, 2],
+  search: [16, 3],
   water: [14, 2],
   coffee: [14, 2],
   sparkler: [15, 0],
-  think: [9, -4],
+  think: [21, -3],
   ask: [5, -4],
   party: [5, -4],
   sad: [5, -4],
   nap: [14, -3],
-  web: [5, 6],
-  read: [5, 4],
+  web: [23, 2],
+  read: [19, 0],
 }

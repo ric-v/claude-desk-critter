@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ART, C, MINI, paint, paintMini } from './critter-art'
+import { ART, C, MINI, miniLift, paint, paintMini } from './critter-art'
 import type { Pose } from './critter-art'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -132,11 +132,6 @@ test('a new act arrives in a puff, then the prop', () => {
   expect(countMini(puff, (gx, gy, v) => gx >= 13 && gy <= 5 && (v === C.PAPER || v === C.STONE))).toBeGreaterThan(0)
 })
 
-test('it breathes while it stands still, and only then', () => {
-  expect(frames({ still: true })).toBeGreaterThan(1)
-  expect(frames({ still: false })).toBe(1)
-})
-
 test('the critter is a flat clay block with square eyes, side arms and four legs', () => {
   const px = paintMini({ ...IDLE, still: true })
   for (const [x, y] of [[2, 0], [9, 0], [2, 5], [9, 5], [5, 3]] as const) expect(atMini(px, x, y)).toBe(C.CLAY)
@@ -162,31 +157,86 @@ test('happy eyes are carets', () => {
   expect([atMini(px, 2, 1), atMini(px, 3, 0), atMini(px, 4, 1)]).toEqual([C.INK, C.INK, C.INK])
 })
 
-test('it reads a book held in front, and writes on paper with a pencil', () => {
-  const read = paintMini({ ...IDLE, prop: 'read' })
-  expect([atMini(read, 1, 3), atMini(read, 5, 4), atMini(read, 10, 6)]).toEqual([C.INK, C.INK, C.INK])
-  expect(countMini(read, (gx, gy, v) => gy >= 4 && gy <= 5 && v === C.PAPER)).toBeGreaterThan(2)
-  expect(countMini(read, (gx, gy, v) => gy >= 4 && gy <= 5 && gx >= 2 && gx <= 9 && v === C.CLAY)).toBeGreaterThan(4)
-  const write = paintMini({ ...IDLE, prop: 'type', t: 0.5 })
-  expect([atMini(write, 2, 3), atMini(write, 9, 6)]).toEqual([C.INK, C.INK])
-  expect(countMini(write, (_, __, v) => v === C.GOLD)).toBeGreaterThan(0)
-})
-
-test('its eyes follow the work: down to the page, up to a thought', () => {
-  expect(atMini(paintMini(IDLE), 3, 2)).toBe(C.CLAY)
-  expect(atMini(paintMini({ ...IDLE, prop: 'type' }), 3, 2)).toBe(C.INK)
-  expect(atMini(paintMini(IDLE), 2, 0)).toBe(C.CLAY)
-  expect(atMini(paintMini({ ...IDLE, prop: 'think' }), 2, 0)).toBe(C.INK)
-})
-
-test('thinking shows dots over its head, one more at a time', () => {
-  const dots = (t: number) => countMini(paintMini({ ...IDLE, prop: 'think', t }), (_, gy, v) => gy < 0 && v === C.CLAY)
-  expect(dots(0)).toBeLessThan(dots(0.75))
-})
-
 test('the wizard hat has a lilac band and a gold star', () => {
   const px = paintMini({ ...IDLE, hat: 3 })
   expect(atMini(px, 5, -2)).toBe(C.LILAC)
   expect(countMini(px, (_, gy, v) => gy < -2 && v === C.GOLD)).toBeGreaterThan(2)
   expect([atMini(px, 1, -1), atMini(px, 10, -1)]).toEqual([C.PURPLE, C.PURPLE])
+})
+
+const body = (pose: Partial<Pose>) => paintMini({ ...IDLE, ...pose }, 'body')
+const where = (px: Uint8Array, color: number) => {
+  const at: string[] = []
+  for (let r = 0; r < MINI.h; r++) for (let c = 0; c < MINI.w; c++) if (px[r * MINI.w + c] === color) at.push(`${MINI.col0 + c},${MINI.row0 + r}`)
+  return at.join(' ')
+}
+
+test('standing still it looks about, and only then', () => {
+  expect(frames({ still: true })).toBeGreaterThan(1)
+  expect(frames({ still: false })).toBe(1)
+})
+
+test('no act ever covers its body or face', () => {
+  for (const prop of ['type', 'read', 'search', 'web', 'think', 'dance', 'shell', 'water', 'coffee', 'sparkler', 'ask', 'sad'] as const)
+    for (let i = 0; i < 24; i++) {
+      const px = body({ prop, t: i / 8, eyes: prop === 'dance' ? 'happy' : 'open', dancing: prop === 'dance' })
+      for (let y = 0; y <= 5; y++)
+        for (let x = 2; x <= 9; x++) {
+          const v = atMini(px, x, y)!
+          const ok = v === C.CLAY || v === C.INK || (prop === 'read' && v === C.GOLD) // reading glasses
+          if (!ok) expect([prop, i, x, y, v]).toEqual([prop, i, x, y, C.CLAY])
+        }
+    }
+})
+
+test('typing sits at a laptop: code on its screen, keys lighting under its hand', () => {
+  const px = paintMini({ ...IDLE, prop: 'type', t: 0.5 })
+  expect(where(px, C.NIGHT)).not.toBe('')
+  const keys = new Set(Array.from({ length: 16 }, (_, i) => where(paintMini({ ...IDLE, prop: 'type', t: i / 8 }), C.GOLD)))
+  expect(keys.size).toBeGreaterThan(1)
+  expect(new Set(Array.from({ length: 24 }, (_, i) => where(paintMini({ ...IDLE, prop: 'type', t: i / 8 }), C.SKY))).size).toBeGreaterThan(3) // the code grows
+})
+
+test('reading has a book open on a stand beside it, a page turning across it', () => {
+  const px = paintMini({ ...IDLE, prop: 'read' })
+  expect(where(px, C.NIGHT)).toBe('') // no screen: it is not the laptop
+  expect(countMini(px, (gx, _, v) => gx >= 13 && v === C.PAPER)).toBeGreaterThan(20)
+  expect(countMini(px, (gx, gy, v) => gx >= 17 && gy >= 4 && v === C.EMBER)).toBeGreaterThan(2) // the stand
+  const pages = new Set(Array.from({ length: 40 }, (_, i) => where(paintMini({ ...IDLE, prop: 'read', t: i / 8 }), C.PAPER)))
+  expect(pages.size).toBeGreaterThan(5)
+})
+
+test('searching slides files past its lens until one matches', () => {
+  const xs = (t: number) => where(paintMini({ ...IDLE, prop: 'search', t }), C.PAPER)
+  expect(xs(0)).not.toBe(xs(0.25))
+  const found = Array.from({ length: 48 }, (_, i) => paintMini({ ...IDLE, prop: 'search', t: i / 8 })).some(px => countMini(px, (gx, gy, v) => gx >= 13 && gy < 2 && v === C.LEAF) > 0)
+  expect(found).toBe(true)
+})
+
+test('the web turns a globe beside it and sends packets to it', () => {
+  const land = (t: number) => where(paintMini({ ...IDLE, prop: 'web', t }), C.LEAF)
+  expect(land(0)).not.toBe('')
+  expect(land(0)).not.toBe(land(0.5))
+  expect(atMini(paintMini({ ...IDLE, prop: 'web', still: true }), 4, 7)).toBe(C.CLAY) // standing on its own legs, no cloud
+})
+
+test('thinking fills a big bubble to its side: gears, then dots, then a bulb', () => {
+  const at = (t: number) => paintMini({ ...IDLE, prop: 'think', t })
+  expect(countMini(at(0), (gx, _, v) => gx >= 17 && v === C.PAPER)).toBeGreaterThan(30)
+  expect(countMini(at(4), (gx, _, v) => gx >= 17 && v === C.GOLD)).toBeGreaterThan(4) // the bulb
+  expect(where(at(0), C.STONE)).not.toBe(where(at(0.25), C.STONE)) // the gears turn
+})
+
+test('its eyes follow the work', () => {
+  expect(atMini(paintMini(IDLE), 4, 1)).toBe(C.CLAY)
+  expect(atMini(paintMini({ ...IDLE, prop: 'type' }), 4, 1)).toBe(C.INK)
+  expect(atMini(paintMini({ ...IDLE, prop: 'think' }), 4, 0)).toBe(C.INK)
+})
+
+test('dancing, its arms swing and the floor lights up; it bobs without changing shape', () => {
+  const a = body({ prop: 'dance', dancing: true, t: 0 })
+  const b = body({ prop: 'dance', dancing: true, t: 0.4 })
+  expect(where(a, C.CLAY)).not.toBe(where(b, C.CLAY))
+  expect(countMini(paintMini({ ...IDLE, prop: 'dance', dancing: true }, 'ground'), (_, gy, v) => gy === 7 && v !== C.SHADOW && v !== 0)).toBeGreaterThan(2)
+  expect(miniLift({ ...IDLE, prop: 'dance', dancing: true, t: 0 })).not.toBe(miniLift({ ...IDLE, prop: 'dance', dancing: true, t: 0.4 }))
 })

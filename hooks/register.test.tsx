@@ -324,8 +324,8 @@ test('a size that does not fit falls back to one that does', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)
   await $.command.run({ command: 'critter', args: 'size 4' } as any)
-  const ui = await $.ui.mount(term({ bodyColumns: 75, maxRows: 30 }))
-  // sizes 4 and 3 need 65 and 52 columns beside the caption and get 45; size 2 needs 39
+  const ui = await $.ui.mount(term({ bodyColumns: 90, maxRows: 30 }))
+  // sizes 4 and 3 need 80 and 64 columns beside the caption and get 60; size 2 needs 48
   expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(11)
   expect(await ui.find({ type: 'Text', text: /size 2/ })).toBeDefined()
   await ui.unmount()
