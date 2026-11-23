@@ -21,12 +21,16 @@ const MIRROR = 2 * (0 - ART.col0) + 12
 /**
  * The bottom `rows` cell rows of the painted canvas, its left edge at lane column `x`, as Raster
  * cells: `[codepoint, fg, bg]` per cell. A cell is ▀ with the top pixel as fg and the bottom one as bg.
+ * At `scale` N each pixel takes N columns and N half-rows, so the critter keeps its shape.
  */
-export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean): Uint32Array {
+export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1): Uint32Array {
   const out = new Uint32Array(Math.max(0, laneCols) * Math.max(0, rows) * 3)
-  const top = ART.h - rows * 2 // canvas row of the strip's first pixel row; negative pads above
-  const pixel = (r: number, c: number) => {
-    if (r < 0 || r >= ART.h) return 0
+  const top = ART.h * scale - rows * 2 // scaled half-row of the strip's first pixel row; negative pads above
+  const pixel = (hr: number, cs: number) => {
+    if (hr < 0) return 0
+    const r = Math.floor(hr / scale)
+    const c = Math.floor(cs / scale)
+    if (r >= ART.h) return 0
     const src = flip ? MIRROR - c : c
     return src < 0 || src >= ART.w ? 0 : px[r * ART.w + src]!
   }
@@ -51,6 +55,8 @@ export type WalkInput = {
   trick: Prop
   reminder: 'none' | 'water' | 'rest'
   zoom: boolean
+  /** Columns (and half-rows) per pixel; 1 when left out. */
+  scale?: number
 }
 
 const WALK = 0.5 // columns a tick
@@ -107,25 +113,26 @@ export class Walker {
   /** Catch up without moving: asleep or not by now, and inside a lane that may have shrunk. */
   settle(input: WalkInput) {
     const { now } = input
-    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - SPRITE_COLS), this.x))
+    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - SPRITE_COLS * (input.scale ?? 1)), this.x))
     if (this.lastEvent === null || input.busy || input.reminder !== 'none' || (input.trick !== 'none' && input.trick !== 'nap')) this.poke(now)
     this.sleeping = now - this.lastEvent! >= (input.night ? NIGHT_SLEEP_MS : SLEEP_MS)
   }
 
   step(input: WalkInput) {
     const { now, laneCols } = input
-    const right = Math.max(0, laneCols - SPRITE_COLS)
+    const scale = input.scale ?? 1
+    const right = Math.max(0, laneCols - SPRITE_COLS * scale)
     this.settle(input)
     if (this.sleeping || input.busy || now < this.petUntil) return
     const zoom = input.zoom || input.trick === 'zoomies'
     if (input.trick !== 'none' && !zoom) return
 
-    let speed = WALK * (zoom ? 3 : 1) * (input.night ? 0.5 : 1)
+    let speed = WALK * scale * (zoom ? 3 : 1) * (input.night ? 0.5 : 1)
     if (input.reminder !== 'none') {
       const mid = Math.floor(right / 2)
       if (this.x === mid) return
       this.facing = mid > this.x ? 1 : -1
-      speed = WALK
+      speed = WALK * scale
     } else {
       if (now < this.restUntil) return
       if (!zoom && this.rand() < REST_CHANCE) {

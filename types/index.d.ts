@@ -16,8 +16,11 @@ export type CritterStats = {
   streak: number
   lastDay: string
 }
-/** Kept across sessions in the store too. `hat` is 'auto' (seasons and night) or a hat number, 0 for none. */
-export type CritterSettings = { hat: 'auto' | number; water: number; rest: number }
+/**
+ * Kept across sessions in the store too. `hat` is 'auto' (seasons and night) or a hat number, 0 for none.
+ * `size` is the terminal critter's scale, 1 to 4: columns (and half-rows) per pixel.
+ */
+export type CritterSettings = { hat: 'auto' | number; water: number; rest: number; size: number }
 /** What the shader is shown now, stepped so a prop or hat only changes while faded out. */
 export type CritterShown = { prop: number; propOn: number; hat: number; hatOn: number }
 /** The local hour and month, for night and the seasons. */

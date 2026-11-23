@@ -98,3 +98,22 @@ test('settle catches up on sleep without moving', () => {
   expect(w.sleeping).toBe(true)
   expect(w.x).toBe(7)
 })
+
+test('scale 2 doubles each pixel', () => {
+  const px = new Uint8Array(ART.w * ART.h)
+  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY // one pixel on the bottom row
+  const cols = 80
+  const cells = encode(px, cols, STRIP_ROWS * 2, 0, false, 2)
+  const c0 = (0 - ART.col0) * 2
+  expect(cell(cells, cols, STRIP_ROWS * 2 - 1, c0)).toEqual([0x2580, PALETTE[C.CLAY]!, PALETTE[C.CLAY]!])
+  expect(cell(cells, cols, STRIP_ROWS * 2 - 1, c0 + 1)).toEqual([0x2580, PALETTE[C.CLAY]!, PALETTE[C.CLAY]!])
+  expect(cell(cells, cols, STRIP_ROWS * 2 - 1, c0 + 2)).toEqual([0x20, DEFAULT_COLOR, DEFAULT_COLOR])
+  expect(cell(cells, cols, STRIP_ROWS * 2 - 2, c0)).toEqual([0x20, DEFAULT_COLOR, DEFAULT_COLOR])
+})
+
+test('a bigger critter needs a wider lane', () => {
+  const w = new Walker(1)
+  w.x = 70
+  w.step({ ...IN, laneCols: 100, scale: 2 })
+  expect(w.x).toBeLessThanOrEqual(100 - SPRITE_COLS * 2)
+})

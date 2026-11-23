@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
 import { ART, paint } from './critter-art'
 import type { Prop } from './critter-art'
-import { BODY_ROWS, STRIP_ROWS, Walker, encode } from './terminal'
+import { BODY_ROWS, SPRITE_COLS, STRIP_ROWS, Walker, encode } from './terminal'
 import type { WalkInput } from './terminal'
 
 // ---- State: the session's, mirrored to the store for what lasts across sessions.
@@ -16,8 +16,8 @@ const trick = atom({ plugin: 'desk-critter', key: 'trick' } as const, 0)
 const reminder = atom({ plugin: 'desk-critter', key: 'reminder' } as const, 'none' as CritterReminder)
 const FRESH_STATS: CritterStats = { xp: 0, turns: 0, tools: 0, sessions: 0, streak: 0, lastDay: '' }
 const stats = atom({ plugin: 'desk-critter', key: 'stats' } as const, FRESH_STATS, { shape: 'stats-1' })
-const DEFAULT_SETTINGS: CritterSettings = { hat: 'auto', water: 45, rest: 0 }
-const settings = atom({ plugin: 'desk-critter', key: 'settings' } as const, DEFAULT_SETTINGS, { shape: 'settings-1' })
+const DEFAULT_SETTINGS: CritterSettings = { hat: 'auto', water: 45, rest: 0, size: 1 }
+const settings = atom({ plugin: 'desk-critter', key: 'settings' } as const, DEFAULT_SETTINGS, { shape: 'settings-2' })
 const shown = atom({ plugin: 'desk-critter', key: 'shown' } as const, { prop: 0, propOn: 0, hat: 0, hatOn: 0 } as CritterShown, {
   shape: 'shown-1',
 })
@@ -247,6 +247,13 @@ async function critterCommand($: EngineInterface, word: string): Promise<{ text:
     await $.ui.open({ id: PANE, title: 'Critter' })
     return { text: 'Critter pane opened.' }
   }
+  if (word === 'size' || word.startsWith('size ')) {
+    const n = Number(word.slice(4).trim())
+    if (word === 'size') return { text: `Your critter is size ${(await read($, settings)).size} in the terminal (1 to 4).` }
+    if (!Number.isInteger(n) || n < SIZE_MIN || n > SIZE_MAX) return { text: 'Pick a size from 1 to 4, like /critter size 2.' }
+    await changeSettings($, c => ({ ...c, size: n }))
+    return { text: `Your critter is now size ${n} in the terminal. Where that does not fit, it uses the biggest size that does.` }
+  }
   if (word === 'away') {
     return { text: (await toggleAway($)) ? 'Your critter went off to nap. /critter away brings it back.' : 'Your critter is back around your prompt.' }
   }
@@ -254,7 +261,7 @@ async function critterCommand($: EngineInterface, word: string): Promise<{ text:
   const isPreview = (PREVIEWS as readonly string[]).includes(word)
   if (t === undefined && !isPreview) {
     const names = [...TRICKS.map(one => one.name), ...PREVIEWS].join(', ')
-    return { text: `Try /critter (the pane), /critter away, or /critter followed by one of: ${names}.` }
+    return { text: `Try /critter (the pane), /critter away, /critter size 1-4, or /critter followed by one of: ${names}.` }
   }
   if (await read($, isAway)) await toggleAway($)
   if (t !== undefined) await doTrick($, t.prop, t.ms)
@@ -284,6 +291,8 @@ const STRIP_KEY = 'desk-critter'
 const TICK_MS = 125
 const SLEEP_TICK_MS = 1000 // asleep, only its z's move
 const CAPTION_GAP = 2
+const SIZE_MIN = 1
+const SIZE_MAX = 4
 // The shader's prop numbers, as the painter's props.
 const PROP_OF: Record<number, Prop> = {
   1: 'type',
@@ -314,12 +323,12 @@ const DOING: Record<CritterAct, string> = {
 // Session-only: where it is in its lane. Everything that lasts is in the atoms, shared with the desktop.
 const walker = new Walker()
 // The strip as last drawn; null while none is on screen, which also stops the tick.
-let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; caption: string } | null = null
+let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; scale: number; size: number; caption: string } | null = null
 let tickTimer: Timer | undefined
 let tickEvery = 0
 let lastFrame = ''
 
-type Scene = { input: WalkInput; act: Prop; feel: number; asking: boolean; hat: number; level: number; idle: string }
+type Scene = { input: WalkInput; act: Prop; feel: number; asking: boolean; hat: number; level: number; size: number; idle: string }
 
 // The atoms as last read: reading them all on every tick costs more than painting, so a tick reuses
 // this for up to a second, and anything that wakes the critter (a change of act, feel, trick,
@@ -358,17 +367,19 @@ async function readScene($: EngineInterface, now: number, laneCols: number): Pro
     asking,
     hat: hatFor((await read($, settings)).hat, s),
     level: levelOf((await read($, stats)).xp),
+    size: Math.max(SIZE_MIN, Math.min(SIZE_MAX, Math.round((await read($, settings)).size || 1))),
     idle: asking ? 'waiting on you' : DOING[a],
   }
 }
 
-/** One line: its name, level, and what it is up to. */
-const captionOf = (sc: Scene) => `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}`
+/** One line: its name, level, what it is up to, and its size when that is not the one picked. */
+const captionOf = (sc: Scene, scale = sc.size) =>
+  `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${scale !== sc.size ? ` · ×${scale}` : ''}`
 
 /** The Raster's cells: the encoded frame's bytes, base64. */
 function frameOf(sc: Scene, rows: number): string {
   const px = paint(walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat))
-  const cells = encode(px, sc.input.laneCols, rows, walker.x, walker.facing < 0)
+  const cells = encode(px, sc.input.laneCols, rows, walker.x, walker.facing < 0, sc.input.scale ?? 1)
   return (new Uint8Array(cells.buffer) as unknown as { toBase64: () => string }).toBase64()
 }
 
@@ -391,10 +402,11 @@ function pace($: EngineInterface) {
 async function tick($: EngineInterface) {
   const now = strip
   if (now === null) return stopTick()
-  const sc = await sceneNow($, now.laneCols)
+  const base = await sceneNow($, now.laneCols)
+  const sc = { ...base, input: { ...base.input, scale: now.scale } }
   walker.step(sc.input)
-  if (captionOf(sc) !== now.caption) {
-    // The caption is laid out with the lane, so a new one is a new render rather than a blit.
+  if (captionOf(sc, now.scale) !== now.caption || sc.size !== now.size) {
+    // The caption and the size set the layout, so a change to either is a new render rather than a blit.
     $.ui.invalidate('ui.render')
   } else {
     const cells = frameOf(sc, now.rows)
@@ -422,7 +434,7 @@ const BODY_TO = 12 - ART.col0
 /** A click in the strip, by strip column: on the critter, it gets petted. */
 async function touched($: EngineInterface, x: number): Promise<boolean> {
   if (strip === null) return false
-  const at = x - strip.laneLeft - walker.x
+  const at = (x - strip.laneLeft - walker.x) / strip.scale
   if (at < BODY_FROM - 1 || at > BODY_TO + 1) return false
   cached = null
   walker.pet(await $.clock.now())
@@ -452,7 +464,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'critter',
       description: 'Your desk critter: /critter opens its pane; /critter away sends it off; /critter <trick or prop> plays one',
-      argumentHint: '[away|dance|wave|jump|sparkler|nap|zoomies|type|read|search|web|shell|think|ask|party|sad|water|coffee]',
+      argumentHint: '[away|size 1-4|dance|wave|jump|sparkler|nap|zoomies|type|read|search|web|shell|think|ask|party|sad|water|coffee]',
     })
 
     // Bring back what lasts across sessions.
@@ -592,15 +604,23 @@ export const register: Register = on => {
       const room = Number((e.props as any).maxRows ?? STRIP_ROWS) - rowsOf(below) - (line === null ? 0 : 1)
       const probe = await sceneNow($, cols)
       walker.settle(probe.input) // asleep or not by now, before the caption says which
-      const caption = captionOf(probe)
-      const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
-      if (room >= BODY_ROWS) {
-        const rows = Math.min(STRIP_ROWS, room)
+      // The size picked, or the biggest one that fits: a whole critter, never one cut in half.
+      const layout = (scale: number) => {
+        const caption = captionOf(probe, scale)
+        const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
         const laneLeft = Math.min(cols, captionCols + CAPTION_GAP)
         const laneCols = Math.max(0, cols - laneLeft)
-        const sc = { ...probe, input: { ...probe.input, laneCols } }
+        const fits = scale === 1 || (room >= BODY_ROWS * scale && laneCols >= SPRITE_COLS * scale)
+        return { scale, caption, captionCols, laneLeft, laneCols, fits }
+      }
+      let pick = layout(probe.size)
+      while (!pick.fits) pick = layout(pick.scale - 1)
+      const { scale, caption, captionCols, laneLeft, laneCols } = pick
+      if (room >= BODY_ROWS) {
+        const rows = Math.min(STRIP_ROWS * scale, room)
+        const sc = { ...probe, input: { ...probe.input, laneCols, scale } }
         walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
-        strip = { requestId: e.requestId, laneLeft, laneCols, rows, caption }
+        strip = { requestId: e.requestId, laneLeft, laneCols, rows, scale, size: probe.size, caption }
         lastFrame = frameOf(sc, rows)
         top = (
           <Box width={cols} height={rows}>
@@ -706,6 +726,16 @@ export const register: Register = on => {
           Auto wears a Santa hat in December, a witch hat in October, and a nightcap at night.
           {nextHat !== undefined ? ` Next to unlock: the ${nextHat.name.toLowerCase()} at level ${nextHat.level}.` : ''}
         </Text>
+
+        <Text bold>Size</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {[1, 2, 3, 4].map(n => (
+            <Button key={`size-${n}`} variant={set.size === n ? 'primary' : 'secondary'} onPress={() => void changeSettings($, c => ({ ...c, size: n }))}>
+              {String(n)}
+            </Button>
+          ))}
+        </Box>
+        <Text dimColor>How big it is in a terminal. Where a size does not fit, it uses the biggest one that does.</Text>
 
         <Text bold>Reminders</Text>
         <Box flexDirection="row" flexWrap="wrap" gap={1}>

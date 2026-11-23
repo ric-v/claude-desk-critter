@@ -287,7 +287,7 @@ test('a click on the critter pets it', async ($, on) => {
   const blits = await startTerm($, clock, on)
   const ui = await $.ui.mount(term())
   const at = await critterAt(ui)
-  await ui.pointer({ type: 'down', x: at.body + 5, y: at.rows - 2, button: 'left' } as any)
+  await (ui as any).pointer({ type: 'down', x: at.body + 5, y: at.rows - 2, button: 'left' } as any)
   await clock.advance(250)
   expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(true)
   await ui.unmount()
@@ -299,8 +299,46 @@ test('a click beside it does nothing', async ($, on) => {
   const ui = await $.ui.mount(term())
   const at = await critterAt(ui)
   const far = at.body > at.laneLeft + 40 ? at.laneLeft + 1 : 99
-  await ui.pointer({ type: 'down', x: far, y: at.rows - 2, button: 'left' } as any)
+  await (ui as any).pointer({ type: 'down', x: far, y: at.rows - 2, button: 'left' } as any)
   await clock.advance(250)
   expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(false)
+  await ui.unmount()
+})
+
+test('/critter size 2 makes a bigger critter', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  const said: any = await $.command.run({ command: 'critter', args: 'size 2' } as any)
+  expect(said.text).toContain('2')
+  const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20)
+  await ui.unmount()
+})
+
+test('a size that does not fit falls back to one that does', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  await $.command.run({ command: 'critter', args: 'size 4' } as any)
+  const ui = await $.ui.mount(term({ bodyColumns: 100, maxRows: 30 }))
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20) // size 2: 60 columns fit beside the caption, 90 do not
+  expect(await ui.find({ type: 'Text', text: /×2/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('/critter size with no number says the size; a bad one says how', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  expect(((await $.command.run({ command: 'critter', args: 'size' } as any)) as any).text).toContain('1')
+  expect(((await $.command.run({ command: 'critter', args: 'size 9' } as any)) as any).text).toContain('1 to 4')
+})
+
+test('the pane picks a size', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  await pane.press({ key: 'size-2' })
+  await pane.unmount()
+  const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20)
   await ui.unmount()
 })
