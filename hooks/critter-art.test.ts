@@ -41,3 +41,44 @@ test('nothing outside the critter at rest', () => {
   const px = paint(IDLE)
   for (let gy = ART.row0; gy < -1; gy++) for (let gx = ART.col0; gx < ART.col0 + ART.w; gx++) expect(at(px, gx, gy)).toBe(0)
 })
+
+const count = (px: Uint8Array, keep: (gx: number, gy: number, v: number) => boolean) => {
+  let n = 0
+  for (let r = 0; r < ART.h; r++) for (let c = 0; c < ART.w; c++) if (keep(ART.col0 + c, ART.row0 + r, px[r * ART.w + c]!)) n++
+  return n
+}
+
+test('type puts a laptop in front', () => {
+  expect(at(paint({ ...IDLE, prop: 'type', arm: 'holding' }), 18, 6)).toBe(C.SKY)
+})
+
+test('shell shows a terminal', () => {
+  expect(at(paint({ ...IDLE, prop: 'shell', arm: 'holding' }), 20, 4)).toBe(C.NIGHT)
+})
+
+test('ask shows the bubble and hides the hat', () => {
+  const px = paint({ ...IDLE, prop: 'ask', arm: 'wave', hat: 4 })
+  expect(at(px, 6, -6)).toBe(C.INK)
+  expect(count(px, (_, gy, v) => gy >= -4 && gy <= -2 && v === C.GOLD)).toBe(0)
+})
+
+test('each hat paints above the head', () => {
+  for (let hat = 1; hat <= 7; hat++) expect(count(paint({ ...IDLE, hat }), (_, gy, v) => gy < 0 && v !== 0)).toBeGreaterThan(0)
+})
+
+test('wizard hat fits the canvas', () => {
+  const px = paint({ ...IDLE, hat: 3 })
+  expect(count(px, (_, gy, v) => gy === ART.row0 && v !== 0)).toBeLessThanOrEqual(1)
+})
+
+test('water holds a bottle, coffee a mug', () => {
+  const water = paint({ ...IDLE, prop: 'water', arm: 'holding' })
+  const coffee = paint({ ...IDLE, prop: 'coffee', arm: 'holding' })
+  expect(water.join()).not.toBe(coffee.join())
+  expect(count(water, (gx, _, v) => gx >= 13 && v !== 0 && v !== C.CLAY)).toBeGreaterThan(0)
+  expect(count(coffee, (gx, _, v) => gx >= 13 && v !== 0 && v !== C.CLAY)).toBeGreaterThan(0)
+})
+
+test('hearts are rose above its head', () => {
+  expect(count(paint({ ...IDLE, prop: 'hearts', eyes: 'happy' }), (_, gy, v) => gy < 0 && v === C.ROSE)).toBeGreaterThan(0)
+})
