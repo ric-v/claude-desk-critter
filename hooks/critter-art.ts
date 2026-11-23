@@ -4,7 +4,7 @@
 // sampled at its centre, so a shape covers a pixel when it covers that pixel's middle.
 
 /** The painted canvas: grid columns col0..col0+w-1, rows row0..row0+h-1. */
-export const ART = { col0: -6, row0: -8, w: 30, h: 20 } as const
+export const ART = { col0: -6, row0: -10, w: 30, h: 20 } as const // feet on the last row
 
 const rgb = (r: number, g: number, b: number) => (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)
 
@@ -57,6 +57,8 @@ export type Prop =
   | 'party'
   | 'sad'
   | 'dance'
+  | 'wave' // the arm alone: Arm 'wave'
+  | 'jump' // the hop alone
   | 'sparkler'
   | 'nap'
   | 'zoomies'
@@ -174,7 +176,7 @@ const zed = (x: number, y: number): Mask => any(box(x, x + 2, y, y + 0.6), box(x
 function paintBehind(cv: Canvas, p: Pose) {
   if (p.prop === 'web') {
     // No lift in the terminal: the cloud sits around its feet.
-    const up = 1.5
+    const up = 3.5
     cv.fill(C.STONE, any(disc(2.5, 11 - up, 2.6), disc(6.5, 10.4 - up, 3.3), disc(10.5, 11 - up, 2.6), box(1.6, 11.4, 11 - up, 13.4 - up)))
     cv.fill(C.PAPER, any(disc(2.5, 11 - up, 2.2), disc(6.5, 10.4 - up, 2.9), disc(10.5, 11 - up, 2.2), box(2, 11, 11 - up, 13 - up)))
   }
