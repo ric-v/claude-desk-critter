@@ -165,7 +165,7 @@ test('terminal shows the critter strip', async ($, on) => {
   await startTerm($, clock, on)
   const ui = await $.ui.mount(term())
   const raster: any = await ui.find({ type: 'Raster' })
-  expect(raster?.props.rows).toBe(5) // size 1: the mini critter
+  expect(raster?.props.rows).toBe(7) // size 1: the mini critter
   expect(await ui.find({ type: 'Text', text: /critter Lv 0/ })).toBeDefined()
   await ui.unmount()
 })
@@ -194,8 +194,8 @@ test('short terminal trims, then captions, then hides', async ($, on) => {
   let ui = await $.ui.mount(term({ maxRows: 10 }))
   expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(10)
   await ui.unmount()
-  ui = await $.ui.mount(term({ maxRows: 3 })) // too short for size 4's body: size 1 fits
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(3)
+  ui = await $.ui.mount(term({ maxRows: 5 })) // too short for size 4's body: size 1 fits
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(5)
   await ui.unmount()
   ui = await $.ui.mount(term({ maxRows: 1 }))
   expect(await ui.find({ type: 'Raster' })).toBeUndefined()

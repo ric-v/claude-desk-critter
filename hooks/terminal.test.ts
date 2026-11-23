@@ -119,9 +119,9 @@ test('a bigger critter needs a wider lane', () => {
 })
 
 test('size 1 is the mini critter; size 4 one and a half times the full one', () => {
-  expect(spriteCols(SIZES[0]!)).toBe(14)
-  expect(stripRows(SIZES[0]!)).toBe(5)
-  expect(bodyRows(SIZES[0]!)).toBe(3)
+  expect(spriteCols(SIZES[0]!)).toBe(21)
+  expect(stripRows(SIZES[0]!)).toBe(7)
+  expect(bodyRows(SIZES[0]!)).toBe(4)
   expect(spriteCols(SIZES[3]!)).toBe(45)
   expect(stripRows(SIZES[3]!)).toBe(15)
 })
@@ -136,10 +136,10 @@ test('the mini critter draws with its eyes in half blocks', () => {
 test('flip keeps the mini body in place', () => {
   const look = SIZES[0]!
   const clayCols = (flip: boolean) => {
-    const cells = encode(look.paint(IDLE), 20, stripRows(look), 0, flip, 1, look.art)
+    const cells = encode(look.paint(IDLE), 30, stripRows(look), 0, flip, 1, look.art)
     const cols = new Set<number>()
     const body = [PALETTE[C.CLAY], PALETTE[C.EMBER]] // lit or shaded, it is all body
-    for (let i = 0; i < cells.length / 3; i++) if (body.includes(cells[i * 3 + 1]) || body.includes(cells[i * 3 + 2])) cols.add(i % 20)
+    for (let i = 0; i < cells.length / 3; i++) if (body.includes(cells[i * 3 + 1]) || body.includes(cells[i * 3 + 2])) cols.add(i % 30)
     return [...cols].sort((a, b) => a - b).join()
   }
   expect(clayCols(true)).toBe(clayCols(false))

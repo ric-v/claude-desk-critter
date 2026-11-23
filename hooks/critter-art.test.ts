@@ -91,17 +91,27 @@ const countMini = (px: Uint8Array, keep: (gx: number, gy: number, v: number) => 
   return n
 }
 
-test('the mini critter has a clay body, two eyes and legs', () => {
+test('the mini critter has a clay body, glinting eyes and legs', () => {
   const px = paintMini(IDLE)
-  expect(atMini(px, 4, 2)).toBe(C.CLAY)
-  expect(atMini(px, 2, 1)).toBe(C.INK)
-  expect(atMini(px, 6, 1)).toBe(C.INK)
-  expect(atMini(px, 1, 4)).toBe(C.CLAY)
+  expect(atMini(px, 5, 2)).toBe(C.CLAY)
+  expect(atMini(px, 3, 3)).toBe(C.INK)
+  expect(atMini(px, 9, 3)).toBe(C.INK)
+  expect(atMini(px, 2, 2)).toBe(C.PAPER) // the glint
+  expect(atMini(px, 1, 6)).toBe(C.CLAY)
 })
 
 test('the mini critter steps and hops', () => {
   expect(paintMini({ ...IDLE, stride: 0 }).join()).not.toBe(paintMini({ ...IDLE, stride: 1 }).join())
-  expect(atMini(paintMini({ ...IDLE, hop: 1 }), 4, -1)).toBe(C.CLAY)
+  expect(atMini(paintMini({ ...IDLE, hop: 1 }), 5, -1)).toBe(C.CLAY)
+})
+
+test('every mini action animates', () => {
+  for (const prop of ['type', 'read', 'search', 'web', 'shell', 'think', 'ask', 'party', 'sad', 'dance', 'sparkler', 'nap', 'zoomies', 'coffee', 'hearts'] as const)
+    expect([prop, paintMini({ ...IDLE, prop, t: 0 }).join() !== paintMini({ ...IDLE, prop, t: 0.5 }).join()]).toEqual([prop, true])
+})
+
+test('the mini critter blushes when happy', () => {
+  expect(atMini(paintMini({ ...IDLE, eyes: 'happy' }), 1, 4)).toBe(C.ROSE)
 })
 
 test('every mini prop and hat shows', () => {
@@ -121,7 +131,13 @@ test('the body is shaded underneath and a shadow sits under its feet', () => {
 
 test('the mini critter is shaded and casts a shadow', () => {
   const px = paintMini(IDLE)
-  expect(atMini(px, 4, 3)).toBe(C.EMBER)
-  expect(atMini(px, 4, 0)).toBe(C.CLAY)
-  expect(atMini(px, 2, 5)).toBe(C.SHADOW)
+  expect(atMini(px, 5, 5)).toBe(C.EMBER)
+  expect(atMini(px, 6, 0)).toBe(C.CLAY)
+  expect(atMini(px, 2, 7)).toBe(C.SHADOW)
+})
+
+test('white mini props are edged so they show on a light terminal', () => {
+  const px = paintMini({ ...IDLE, prop: 'water', arm: 'holding' })
+  // the bottle's white shoulder at (13, 1) has nothing to its left, so that pixel is its edge
+  expect(atMini(px, 13, 0)).toBe(C.STONE)
 })

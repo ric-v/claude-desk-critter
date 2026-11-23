@@ -12,8 +12,8 @@ export type Art = { col0: number; row0: number; w: number; h: number; mid: numbe
 
 /** The full critter: the shader's own grid. */
 export const ART = { col0: -6, row0: -10, w: 30, h: 20, mid: 12.5, bodyFrom: 6, bodyTo: 18, bodyPx: 10 } as const
-/** The mini critter, drawn by hand for the smallest size: a 9 x 6 body with room for hats and props. */
-export const MINI = { col0: -2, row0: -4, w: 14, h: 10, mid: 6.5, bodyFrom: 2, bodyTo: 10, bodyPx: 6 } as const
+/** The mini critter, drawn by hand for the smallest size: a 12 x 8 body with room for hats and props. */
+export const MINI = { col0: -3, row0: -6, w: 21, h: 14, mid: 9, bodyFrom: 3, bodyTo: 14, bodyPx: 8 } as const
 
 const rgb = (r: number, g: number, b: number) => (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)
 
@@ -34,6 +34,7 @@ export const PALETTE: readonly number[] = [
   rgb(0.42, 0.33, 0.72), // PURPLE
   rgb(0.46, 0.53, 0.78), // NIGHTCAP
   rgb(0.24, 0.23, 0.22), // SHADOW: the terminal's own, under its feet
+  rgb(0.94, 0.62, 0.5), // LIGHT: where the light catches its top
 ]
 
 /** Palette indexes by name. */
@@ -52,6 +53,7 @@ export const C = {
   PURPLE: 12,
   NIGHTCAP: 13,
   SHADOW: 14,
+  LIGHT: 15,
 } as const
 
 export type Eyes = 'open' | 'blink' | 'lidded' | 'shut' | 'happy' | 'crossed'
@@ -362,171 +364,221 @@ export function paint(pose: Pose): Uint8Array {
 }
 
 // ---- The mini critter. Shrinking the full art loses everything that makes it a critter, so the
-// smallest size is drawn by hand, pixel by pixel: grid x 0..8 is the body, grid y 0..3 the body
-// and 4..5 the legs; hats and props sit around it.
+// smallest size is drawn by hand, pixel by pixel: grid x 0..11 is the body, grid y 0..5 the body
+// and 6..7 the legs. Hats and props sit around it, and every action has a few frames of its own.
 
 /** Paint the mini critter, facing right: MINI.w x MINI.h palette indexes, row-major. */
 export function paintMini(p: Pose): Uint8Array {
   const px = new Uint8Array(MINI.w * MINI.h)
-  const lift = p.hop
-  const dot = (gx: number, gy: number, color: number) => {
-    const r = gy - lift - MINI.row0
+  // Frame `n` of an animation of `count` frames playing `rate` frames a second.
+  const frame = (count: number, rate = 2) => Math.floor(p.t * rate) % count
+  let lift = p.hop as number
+  if (p.prop === 'web' || p.prop === 'dance') lift += frame(2) // it bobs on its cloud, and to the beat
+  const set = (gx: number, gy: number, color: number, ground = false) => {
+    const r = gy - (ground ? 0 : lift) - MINI.row0
     const c = gx - MINI.col0
     if (r >= 0 && r < MINI.h && c >= 0 && c < MINI.w) px[r * MINI.w + c] = color
   }
+  const isEmpty = (gx: number, gy: number) => {
+    const r = gy - lift - MINI.row0
+    const c = gx - MINI.col0
+    return r < 0 || r >= MINI.h || c < 0 || c >= MINI.w || px[r * MINI.w + c] === 0
+  }
+  const dot = (gx: number, gy: number, color: number) => set(gx, gy, color)
   const row = (x0: number, x1: number, gy: number, color: number) => {
     for (let x = x0; x <= x1; x++) dot(x, gy, color)
   }
-  const blink = (rate: number, phase = 0) => Math.floor(p.t * rate + phase) % 2 === 0
+  /** Rows of a little picture, top row at `gy`: each character a pixel, looked up in `key`; '.' is nothing. */
+  const sprite = (gx: number, gy: number, rows: string[], key: Record<string, number>) => {
+    rows.forEach((line, dy) => [...line].forEach((ch, dx) => key[ch] !== undefined && dot(gx + dx, gy + dy, key[ch]!)))
+  }
+  const heart = (gx: number, gy: number) => sprite(gx, gy, ['r.r', 'rrr', '.r.'], { r: C.ROSE })
 
-  // Its shadow, on the ground whether or not it hops; the web cloud takes its place.
-  if (p.prop !== 'web') for (let x = 0; x <= 8; x++) px[(5 - MINI.row0) * MINI.w + (x - MINI.col0)] = C.SHADOW
-
-  // Behind it: the web cloud, the rain cloud.
+  // On the ground: its shadow, or the web cloud in its place.
   if (p.prop === 'web') {
-    row(-1, 9, 5, C.STONE)
-    row(0, 8, 5, C.PAPER)
-    row(1, 7, 4, C.PAPER)
-  }
+    for (let x = -2; x <= 13; x++) set(x, 7, x === -2 || x === 13 ? C.STONE : C.PAPER, true)
+    for (let x = -1; x <= 12; x++) set(x, 6, x === -1 || x === 12 ? C.STONE : C.PAPER, true)
+    for (const x of [1, 2, 5, 6, 9, 10]) set(x, 5, C.PAPER, true)
+  } else for (let x = 0; x <= 11; x++) set(x, 7, C.SHADOW, true)
+
+  // Behind it: the rain cloud.
   if (p.prop === 'sad') {
-    row(2, 6, -3, C.STONE)
-    row(3, 5, -4, C.STONE)
-    dot(blink(2) ? 3 : 5, -2, C.BLUE)
-    dot(blink(2) ? 5 : 3, -1, C.BLUE)
+    sprite(2, -6, ['.ssss.', 'ssssss', '.ssss.'], { s: C.STONE })
+    row(8, 9, -5, C.STONE)
+    const f = frame(3, 4)
+    for (const [i, x] of [3, 6, 9].entries()) dot(x, -3 + ((f + i) % 3), C.BLUE)
   }
 
-  // Body, nubs, legs that step (or tap along while dancing).
-  row(1, 7, 0, C.CLAY)
-  row(0, 8, 1, C.CLAY)
-  row(0, 8, 2, C.CLAY)
-  row(1, 7, 3, C.CLAY)
-  // Lit from the top left: the underside and the far side a shade darker.
-  row(1, 7, 3, C.EMBER)
-  dot(8, 1, C.EMBER)
-  dot(8, 2, C.EMBER)
-  const stride = p.dancing ? (blink(2.5) ? 0 : 1) : p.stride
+  // The body: rounded, lit from the top left, shaded underneath and on its far side.
+  row(1, 10, 0, C.CLAY)
+  for (const y of [1, 2, 3, 4]) row(0, 11, y, C.CLAY)
+  row(1, 10, 5, C.EMBER)
+  for (const y of [1, 2, 3, 4]) dot(11, y, C.EMBER)
+  row(2, 4, 0, C.LIGHT)
+  dot(1, 1, C.LIGHT)
+  dot(-1, 2, C.CLAY) // the near side's nub
+  dot(-1, 3, C.CLAY)
+
+  // Legs that step, or tap along while dancing; tucked up on the cloud.
   if (p.prop !== 'web') {
-    for (const x of [1, 3, 5, 7]) dot(x, 4, C.CLAY)
-    for (const x of stride === 0 ? [1, 5] : [3, 7]) dot(x, 5, C.CLAY)
+    const stride = p.dancing ? frame(2, 5) : p.stride
+    for (const x of [1, 4, 7, 10]) dot(x, 6, C.CLAY)
+    for (const x of stride === 0 ? [1, 7] : [4, 10]) dot(x, 7, C.CLAY)
   }
 
-  // Eyes: open two pixels tall; happy up high; shut, lidded or blinking a low line.
+  // Eyes: 2 x 2 with a glint; a line shut; ^ ^ and a blush when happy.
+  for (const x of [2, 8]) {
+    if (p.eyes === 'happy') {
+      dot(x, 3, C.INK)
+      dot(x + 1, 2, C.INK)
+      dot(x + 2, 3, C.INK)
+    } else if (p.eyes === 'shut' || p.eyes === 'blink') row(x, x + 1, 3, C.INK)
+    else if (p.eyes === 'lidded') {
+      row(x, x + 1, 2, C.EMBER)
+      row(x, x + 1, 3, C.INK)
+    } else {
+      dot(x, 2, C.PAPER)
+      dot(x + 1, 2, C.INK)
+      row(x, x + 1, 3, C.INK)
+    }
+  }
   if (p.eyes === 'happy') {
-    dot(2, 1, C.INK)
-    dot(6, 1, C.INK)
-  } else if (p.eyes === 'shut' || p.eyes === 'lidded' || p.eyes === 'blink') {
-    dot(2, 2, C.INK)
-    dot(6, 2, C.INK)
-  } else {
-    for (const y of [1, 2]) {
-      dot(2, y, C.INK)
-      dot(6, y, C.INK)
-    }
+    dot(1, 4, C.ROSE)
+    dot(10, 4, C.ROSE)
   }
 
-  // Its arm: out front to hold something, up to wave.
-  if (p.arm === 'holding') dot(9, 2, C.CLAY)
+  // The far arm: resting, held out, tapping, or up to wave.
+  const holding = p.arm === 'holding'
   if (p.arm === 'raised' || p.arm === 'wave') {
-    dot(9, 0, C.CLAY)
-    dot(p.arm === 'wave' && blink(2.5) ? 10 : 9, -1, C.CLAY)
+    const out = p.arm === 'wave' && frame(2, 3) === 1
+    dot(12, 1, C.CLAY)
+    dot(12, 0, C.CLAY)
+    dot(out ? 13 : 12, -1, C.CLAY)
+  } else if (holding) row(12, 13, p.prop === 'type' ? 4 : 3, C.CLAY)
+  else {
+    dot(12, 2, C.CLAY)
+    dot(12, 3, C.CLAY)
   }
 
-  // What it holds or does.
   switch (p.prop) {
-    case 'type':
-      row(10, 11, 0, C.STONE)
-      dot(10, 1, C.SKY)
-      dot(11, 1, C.STONE)
-      row(9, 11, 3, C.STONE)
-      break
-    case 'shell':
-      for (const y of [0, 1, 2, 3]) row(10, 11, y, C.NIGHT)
-      dot(10, 1, C.LEAF)
-      if (blink(1.2)) dot(11, 2, C.LEAF)
-      break
-    case 'read':
-      row(1, 7, 3, C.PAPER)
-      dot(4, 3, C.STONE)
-      row(3, 5, 1, C.INK) // the glasses' bridge between its eyes
-      break
-    case 'search': {
-      const x = blink(1) ? 10 : 9
-      row(x, x + 2, -2, C.INK)
-      dot(x, -1, C.INK)
-      dot(x + 1, -1, C.SKY)
-      dot(x + 2, -1, C.INK)
-      row(x, x + 2, 0, C.INK)
-      dot(x - 1, 1, C.INK)
+    case 'type': {
+      // A laptop: a lit screen with lines of text scrolling up, the arm tapping its keys.
+      for (let y = 0; y <= 4; y++) dot(17, y, C.STONE)
+      row(15, 17, -1, C.STONE)
+      const f = frame(4, 6)
+      for (const y of [0, 1, 2, 3]) row(15, 16, y, (y + f) % 4 === 3 ? C.SKY : (y + f) % 2 ? C.PAPER : C.SKY)
+      row(14, 17, 4, C.STONE)
+      row(12, 17, 5, C.STONE)
+      dot(frame(2, 6) ? 13 : 14, 4, C.CLAY)
       break
     }
-    case 'think':
-      if (blink(2)) {
-        dot(4, -3, C.EMBER)
-        row(3, 5, -2, C.EMBER)
-        dot(4, -1, C.EMBER)
-      } else {
-        dot(3, -3, C.EMBER)
-        dot(5, -3, C.EMBER)
-        dot(4, -2, C.EMBER)
-        dot(3, -1, C.EMBER)
-        dot(5, -1, C.EMBER)
-      }
+    case 'shell': {
+      // A little terminal: a prompt, a line of output scrolling, a blinking cursor.
+      for (let y = 0; y <= 5; y++) row(13, 17, y, y === 0 || y === 5 ? C.STONE : C.NIGHT)
+      for (let y = 0; y <= 5; y++) dot(17, y, C.STONE)
+      const f = frame(3, 2)
+      sprite(14, 1 + (f === 2 ? 0 : 0), ['g..', '.g.', 'g..'], { g: C.LEAF })
+      if (frame(2, 3)) row(16, 16, 3, C.LEAF)
+      row(14, 14 + f, 5 - 0, f === 0 ? C.NIGHT : C.STONE)
       break
+    }
+    case 'read': {
+      // Round glasses, and an open book whose pages turn.
+      for (const x of [1, 7]) {
+        row(x, x + 3, 1, C.INK)
+        dot(x, 2, C.INK)
+        dot(x + 3, 2, C.INK)
+      }
+      row(5, 6, 2, C.INK)
+      sprite(3, 4, ['pppppp', 'bbssbb', 'bbbbbb'], { p: C.PAPER, b: C.BLUE, s: C.SKY })
+      dot(frame(2) ? 7 : 4, 3, C.PAPER) // a page lifting, one side then the other
+      break
+    }
+    case 'search': {
+      // A magnifying glass swept back and forth.
+      const x = [12, 13, 14, 13][frame(4, 3)]!
+      sprite(x, -3, ['.ii.', 'ikki', 'ikki', '.ii.'], { i: C.STONE, k: C.SKY })
+      dot(x, 1, C.STONE)
+      dot(x - 1, 2, C.STONE)
+      break
+    }
+    case 'think': {
+      // A spark turning over its head.
+      const shapes = [
+        ['.e.', 'ege', '.e.'],
+        ['e.e', '.g.', 'e.e'],
+      ]
+      sprite(4, -4, shapes[frame(2, 3)]!, { e: C.EMBER, g: C.GOLD })
+      dot(8, -2, C.EMBER)
+      if (frame(2)) dot(9, -3, C.EMBER)
+      break
+    }
     case 'ask':
-      for (const y of [-4, -3, -2, -1]) row(3, 5, y, C.PAPER)
-      dot(4, -4, C.INK)
-      dot(4, -3, C.INK)
-      dot(4, -1, C.INK)
+      // A speech bubble with a "!" flashing for attention, over a waving arm.
+      sprite(2, -6, ['.ssssss.', 'sppkkpps', 'sppkkpps', 'spppppps', 'sppkkpps', '.ssssss.'], { s: C.STONE, p: C.PAPER, k: frame(2, 3) ? C.ROSE : C.INK })
       break
     case 'party': {
-      dot(4, -4, C.ROSE)
-      dot(4, -3, C.GOLD)
-      row(3, 5, -2, C.BLUE)
-      row(2, 6, -1, C.GOLD)
-      const tints = [C.GOLD, C.BLUE, C.ROSE]
-      for (let i = 0; i < 4; i++) dot(((i * 4 + Math.floor(p.t * 3)) % 13) - 2, -4 + ((i + Math.floor(p.t * 4)) % 4), tints[i % 3]!)
+      // A striped party hat with a pom, and confetti falling past.
+      sprite(3, -6, ['..rr..', '..gg..', '.bbbb.', '.gggg.', 'bbbbbb'], { r: C.ROSE, g: C.GOLD, b: C.BLUE })
+      const tints = [C.GOLD, C.BLUE, C.ROSE, C.LEAF]
+      const f = frame(6, 6)
+      for (let i = 0; i < 6; i++) {
+        const x = [-3, -1, 10, 13, 15, 16][i]!
+        const y = -6 + ((f + i * 2) % 12)
+        if (isEmpty(x, y)) dot(x, y, tints[i % 4]!)
+      }
       break
     }
     case 'dance':
-      for (const y of [-3, -2, -1]) dot(10, y, C.INK)
-      dot(9, -1, C.INK)
-      dot(11, blink(3) ? -3 : -2, C.INK)
+      // Notes bobbing on either side, one up while the other is down.
+      for (const [i, x] of [-3, 14].entries()) {
+        const y = (frame(2, 3) + i) % 2 === 0 ? -3 : -2
+        sprite(x, y, ['.ii', '.i.', 'ii.'], { i: C.BLUE })
+      }
       break
-    case 'sparkler':
-      dot(10, 1, C.STONE)
-      dot(10, 0, C.STONE)
-      dot(blink(4) ? 10 : 11, -1, C.GOLD)
-      dot(blink(4) ? 11 : 9, -2, C.GOLD)
+    case 'sparkler': {
+      // A stick held out, sparks fanning from its tip.
+      dot(13, 2, C.STONE)
+      dot(14, 1, C.STONE)
+      dot(15, 0, C.STONE)
+      const sparks = [
+        ['g.g', '.g.', 'g.g'],
+        ['.g.', 'ggg', '.g.'],
+        ['g.g', '...', 'g.g'],
+      ]
+      sprite(15, -3, sparks[frame(3, 4)]!, { g: C.GOLD })
       break
+    }
     case 'nap': {
-      const y = blink(0.5) ? -2 : -3
-      row(9, 11, y - 2, C.INK)
-      dot(10, y - 1, C.INK)
-      row(9, 11, y, C.INK)
+      // Z's, big to small, drifting up.
+      const f = frame(3, 2)
+      sprite(12, -1 - f, ['zz', '.z', 'zz'], { z: C.SKY })
+      sprite(14, -4 - f, ['zzz', '.z.', 'zzz'], { z: C.SKY })
       break
     }
     case 'zoomies':
-      row(-2, -1, 1, C.STONE)
-      row(-2, -1, 3, C.STONE)
+      // Speed lines streaming behind it.
+      for (const [i, y] of [1, 3, 5].entries()) row(-3 + ((frame(2, 6) + i) % 2), -2, y, C.STONE)
       break
     case 'water':
-      dot(10, -1, C.BLUE)
-      for (const y of [0, 1, 2, 3]) dot(10, y, y === 0 ? C.PAPER : C.SKY)
-      dot(11, 1, C.PAPER)
+      // A bottle held out: a blue cap, water inside, a glint.
+      sprite(13, -1, ['.b.', '.p.', 'pkp', 'pkp', 'pkp', 'ppp'], { b: C.BLUE, p: C.PAPER, k: C.SKY })
       break
-    case 'coffee':
-      row(10, 11, 1, C.EMBER)
-      row(10, 11, 2, C.PAPER)
-      row(10, 11, 3, C.PAPER)
-      dot(blink(2) ? 10 : 11, -1, C.STONE)
-      dot(blink(2) ? 11 : 10, 0, C.STONE)
+    case 'coffee': {
+      // A mug of coffee, steam curling up.
+      sprite(13, 1, ['eee.', 'ppp.', 'pppp', 'ppp.'], { e: C.EMBER, p: C.PAPER })
+      dot(16, 2, C.PAPER)
+      const f = frame(2, 3)
+      dot(13 + f, -1, C.STONE)
+      dot(14 - f, 0, C.STONE)
+      dot(15, -2 + f, C.STONE)
       break
+    }
     case 'hearts': {
-      const y = blink(2) ? -3 : -4
-      dot(3, y, C.ROSE)
-      dot(5, y, C.ROSE)
-      row(3, 5, y + 1, C.ROSE)
-      dot(4, y + 2, C.ROSE)
+      // Hearts floating up from its head.
+      const f = frame(3, 3)
+      heart(1, -3 - f)
+      heart(7, -5 + f)
       break
     }
   }
@@ -535,45 +587,39 @@ export function paintMini(p: Pose): Uint8Array {
   if (p.prop !== 'party' && p.prop !== 'ask') {
     switch (p.hat) {
       case 1: // beanie
-        row(1, 7, -1, C.BLUE)
-        row(2, 6, -2, C.BLUE)
-        dot(4, -3, C.PAPER)
+        sprite(1, -4, ['....pp....', '..bbbbbb..', '.bbbbbbbb.', 'nnnnnnnnnn'], { b: C.BLUE, p: C.PAPER, n: C.NIGHTCAP })
         break
       case 2: // flower crown
-        row(1, 7, -1, C.LEAF)
-        dot(2, -1, C.ROSE)
-        dot(4, -1, C.GOLD)
-        dot(6, -1, C.PAPER)
+        row(0, 11, -1, C.LEAF)
+        for (const x of [2, 6, 10]) sprite(x - 1, -3, ['.r.', 'rgr', '.r.'], { r: x === 6 ? C.PAPER : C.ROSE, g: C.GOLD })
         break
       case 3: // wizard
-        row(1, 7, -1, C.PURPLE)
-        row(2, 6, -2, C.PURPLE)
-        row(3, 5, -3, C.PURPLE)
-        dot(4, -4, C.PURPLE)
-        dot(4, -2, C.GOLD)
+        sprite(0, -6, ['.....uu.....', '....uuuu....', '....uguu....', '...uuuuuu...', '..uuuuuuuu..', 'uuuuuuuuuuuu'], { u: C.PURPLE, g: C.GOLD })
         break
       case 4: // crown
-        row(2, 6, -1, C.GOLD)
-        for (const x of [2, 4, 6]) dot(x, -2, C.GOLD)
-        dot(4, -1, C.ROSE)
+        sprite(2, -3, ['g..gg..g', 'gggggggg', 'grgbbgrg'], { g: C.GOLD, r: C.ROSE, b: C.BLUE })
         break
       case 5: // nightcap
       case 6: {
         // santa
-        const cap = p.hat === 5 ? C.NIGHTCAP : C.ROSE
-        row(1, 7, -1, p.hat === 6 ? C.PAPER : cap)
-        row(1, 5, -2, cap)
-        row(0, 2, -3, cap)
-        dot(-1, -3, C.PAPER)
+        const c = p.hat === 5 ? C.NIGHTCAP : C.ROSE
+        sprite(-2, -5, ['ww.........', 'wwccc......', '..ccccc....', '...ccccccc..', '..rrrrrrrrrr'], { c, w: C.PAPER, r: p.hat === 6 ? C.PAPER : c })
         break
       }
       case 7: // witch
-        row(0, 8, -1, C.NIGHT)
-        row(3, 5, -2, C.NIGHT)
-        row(4, 5, -3, C.NIGHT)
-        dot(5, -4, C.NIGHT)
+        sprite(-1, -6, ['........s.....', '.......sn.....', '......snn.....', '.....snnn.....', '....uuuuuu....', 'ssssssssssssss'], { n: C.NIGHT, s: C.STONE, u: C.PURPLE })
         break
     }
   }
+
+  // White things get a stone edge where they meet the ground, so they hold their shape on a light terminal too.
+  const edge: number[] = []
+  for (let r = 0; r < MINI.h; r++)
+    for (let c = 0; c < MINI.w; c++) {
+      if (px[r * MINI.w + c] !== 0) continue
+      const near = [r > 0 && px[(r - 1) * MINI.w + c], r < MINI.h - 1 && px[(r + 1) * MINI.w + c], c > 0 && px[r * MINI.w + c - 1], c < MINI.w - 1 && px[r * MINI.w + c + 1]]
+      if (near.includes(C.PAPER)) edge.push(r * MINI.w + c)
+    }
+  for (const i of edge) px[i] = C.STONE
   return px
 }
