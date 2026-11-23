@@ -385,7 +385,7 @@ test('a picture the terminal refuses turns into the text critter', async ($, on)
   await ui.unmount()
 })
 
-test('the backdrop is set before the rest of the session finishes starting', async ($, on) => {
+test('the backdrop is set early, and again once the session has started', async ($, on) => {
   mock.clock(on, { now: NOV_23_NOON })
   mock.store(on, {})
   let themes = 0
@@ -400,6 +400,6 @@ test('the backdrop is set before the rest of the session finishes starting', asy
   })
   on('command.register', () => ({ value: undefined }) as any)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true } as any)
-  expect(themesWhenStarted).toBe(1)
-  expect(themes).toBe(1) // set once: no second set at the end
+  expect(themesWhenStarted).toBe(1) // early, before the engine's own start
+  expect(themes).toBe(2) // and again at the end, in case the app dropped the early one
 })

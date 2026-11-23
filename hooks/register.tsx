@@ -496,14 +496,11 @@ function rowsOf(node: unknown): number {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // Put the critter on screen first: the backdrop doesn't wait for the rest of the session
+    // Try to put the critter on screen first, so it doesn't wait for the rest of the session
     // (every MCP server connecting, slow ones timing out) nor for the stats and reminders below.
-    // A theme set before the app attaches is held for it; one that went nowhere is set again at the end.
-    let isUp = false
-    if (!(await read($, isAway))) {
-      const early = await arrive($).catch(() => undefined)
-      isUp = early !== undefined && (early.isDrawn || early.requestId !== undefined)
-    }
+    // The app may not be attached yet and may drop a theme set this early, so it is always set
+    // again once the session has started: that one is the set known to draw.
+    if (!(await read($, isAway))) await arrive($).catch(() => undefined)
     const done = await next(e)
     await $.command.register({
       name: 'critter',
@@ -534,7 +531,7 @@ export const register: Register = on => {
     skyTimer?.cancel()
     skyTimer = $.clock.every(SKY_MS, () => void checkSky($))
     await scheduleReminders($)
-    if (!isUp && !(await read($, isAway))) await arrive($)
+    if (!(await read($, isAway))) await arrive($)
     return done
   })
 
