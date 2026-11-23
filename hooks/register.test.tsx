@@ -165,7 +165,7 @@ test('terminal shows the critter strip', async ($, on) => {
   await startTerm($, clock, on)
   const ui = await $.ui.mount(term())
   const raster: any = await ui.find({ type: 'Raster' })
-  expect(raster?.props.rows).toBe(10)
+  expect(raster?.props.rows).toBe(4) // size 1, the smallest: a third of the full critter
   expect(await ui.find({ type: 'Text', text: /critter Lv 0/ })).toBeDefined()
   await ui.unmount()
 })
@@ -190,10 +190,14 @@ test('away hides the strip', async ($, on) => {
 test('short terminal trims, then captions, then hides', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)
-  let ui = await $.ui.mount(term({ maxRows: 8 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(8)
+  await $.command.run({ command: 'critter', args: 'size 4' } as any) // 15 rows, its body 8
+  let ui = await $.ui.mount(term({ maxRows: 10 }))
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(10)
   await ui.unmount()
-  ui = await $.ui.mount(term({ maxRows: 3 }))
+  ui = await $.ui.mount(term({ maxRows: 3 })) // too short for size 4's body: size 1 fits
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(3)
+  await ui.unmount()
+  ui = await $.ui.mount(term({ maxRows: 1 }))
   expect(await ui.find({ type: 'Raster' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /critter Lv/ })).toBeDefined()
   await ui.unmount()
@@ -287,7 +291,7 @@ test('a click on the critter pets it', async ($, on) => {
   const blits = await startTerm($, clock, on)
   const ui = await $.ui.mount(term())
   const at = await critterAt(ui)
-  await (ui as any).pointer({ type: 'down', x: at.body + 5, y: at.rows - 2, button: 'left' } as any)
+  await (ui as any).pointer({ type: 'down', x: at.body + 1, y: at.rows - 1, button: 'left' } as any)
   await clock.advance(250)
   expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(true)
   await ui.unmount()
@@ -311,7 +315,7 @@ test('/critter size 2 makes a bigger critter', async ($, on) => {
   const said: any = await $.command.run({ command: 'critter', args: 'size 2' } as any)
   expect(said.text).toContain('2')
   const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20)
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(8)
   await ui.unmount()
 })
 
@@ -319,9 +323,10 @@ test('a size that does not fit falls back to one that does', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)
   await $.command.run({ command: 'critter', args: 'size 4' } as any)
-  const ui = await $.ui.mount(term({ bodyColumns: 100, maxRows: 30 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20) // size 2: 60 columns fit beside the caption, 90 do not
-  expect(await ui.find({ type: 'Text', text: /×2/ })).toBeDefined()
+  const ui = await $.ui.mount(term({ bodyColumns: 64, maxRows: 30 }))
+  // size 4 needs 45 columns beside the caption and gets 43; size 3 needs 34 and gets 34
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(12)
+  expect(await ui.find({ type: 'Text', text: /size 3/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -336,9 +341,9 @@ test('the pane picks a size', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
-  await pane.press({ key: 'size-2' })
+  await pane.press({ key: 'size-4' })
   await pane.unmount()
   const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(20)
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(15)
   await ui.unmount()
 })

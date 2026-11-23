@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { ART, C, PALETTE, paint } from './critter-art'
 import type { Pose } from './critter-art'
-import { BODY_ROWS, DEFAULT_COLOR, SPRITE_COLS, STRIP_ROWS, Walker, encode } from './terminal'
+import { BODY_ROWS, DEFAULT_COLOR, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -115,5 +115,39 @@ test('a bigger critter needs a wider lane', () => {
   const w = new Walker(1)
   w.x = 70
   w.step({ ...IN, laneCols: 100, scale: 2 })
-  expect(w.x).toBeLessThanOrEqual(100 - SPRITE_COLS * 2)
+  expect(w.x).toBeLessThanOrEqual(100 - spriteCols(2))
+})
+
+test('size 1 is a third of the full critter, size 4 one and a half times', () => {
+  expect(spriteCols(SIZES[0])).toBe(10)
+  expect(stripRows(SIZES[0])).toBe(4)
+  expect(spriteCols(SIZES[3])).toBe(45)
+  expect(stripRows(SIZES[3])).toBe(15)
+  expect(bodyRows(SIZES[0])).toBe(2)
+})
+
+test('a small critter keeps its eyes, in quarter blocks', () => {
+  const f = SIZES[0]
+  const cols = spriteCols(f)
+  const cells = encode(paint(IDLE), cols, stripRows(f), 0, false, f)
+  let ink = false
+  for (let i = 0; i < cells.length / 3; i++) {
+    const [ch, fg, bg] = [cells[i * 3]!, cells[i * 3 + 1]!, cells[i * 3 + 2]!]
+    expect(ch === 0x20 || (ch >= 0x2580 && ch <= 0x259f)).toBe(true)
+    if (fg === PALETTE[C.INK] || bg === PALETTE[C.INK]) ink = true
+  }
+  expect(ink).toBe(true)
+})
+
+test('a small critter still has a clay body', () => {
+  const f = SIZES[0]
+  const cells = encode(paint(IDLE), spriteCols(f), stripRows(f), 0, false, f)
+  expect(cells.some((v, i) => i % 3 !== 0 && v === PALETTE[C.CLAY])).toBe(true)
+})
+
+test('a small critter fits its lane', () => {
+  const w = new Walker(1)
+  w.x = 50
+  w.step({ ...IN, laneCols: 30, scale: SIZES[0] })
+  expect(w.x).toBeLessThanOrEqual(30 - spriteCols(SIZES[0]))
 })

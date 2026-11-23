@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
 import { ART, paint } from './critter-art'
 import type { Prop } from './critter-art'
-import { BODY_ROWS, SPRITE_COLS, STRIP_ROWS, Walker, encode } from './terminal'
+import { SIZES, Walker, bodyRows, encode, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
 
 // ---- State: the session's, mirrored to the store for what lasts across sessions.
@@ -323,7 +323,8 @@ const DOING: Record<CritterAct, string> = {
 // Session-only: where it is in its lane. Everything that lasts is in the atoms, shared with the desktop.
 const walker = new Walker()
 // The strip as last drawn; null while none is on screen, which also stops the tick.
-let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; scale: number; size: number; caption: string } | null = null
+// `scale` is the shown size's columns per pixel; `shown` that size (1-4), `size` the one picked.
+let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; scale: number; shown: number; size: number; caption: string } | null = null
 let tickTimer: Timer | undefined
 let tickEvery = 0
 let lastFrame = ''
@@ -373,8 +374,8 @@ async function readScene($: EngineInterface, now: number, laneCols: number): Pro
 }
 
 /** One line: its name, level, what it is up to, and its size when that is not the one picked. */
-const captionOf = (sc: Scene, scale = sc.size) =>
-  `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${scale !== sc.size ? ` · ×${scale}` : ''}`
+const captionOf = (sc: Scene, shown = sc.size) =>
+  `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${shown !== sc.size ? ` · size ${shown}` : ''}`
 
 /** The Raster's cells: the encoded frame's bytes, base64. */
 function frameOf(sc: Scene, rows: number): string {
@@ -405,7 +406,7 @@ async function tick($: EngineInterface) {
   const base = await sceneNow($, now.laneCols)
   const sc = { ...base, input: { ...base.input, scale: now.scale } }
   walker.step(sc.input)
-  if (captionOf(sc, now.scale) !== now.caption || sc.size !== now.size) {
+  if (captionOf(sc, now.shown) !== now.caption || sc.size !== now.size) {
     // The caption and the size set the layout, so a change to either is a new render rather than a blit.
     $.ui.invalidate('ui.render')
   } else {
@@ -601,26 +602,27 @@ export const register: Register = on => {
     strip = null
     if (e.surface === 'terminal' && !(await read($, isAway))) {
       const cols = Math.max(1, Math.min(512, Number((e.props as any).bodyColumns) || 80))
-      const room = Number((e.props as any).maxRows ?? STRIP_ROWS) - rowsOf(below) - (line === null ? 0 : 1)
+      const room = Number((e.props as any).maxRows ?? stripRows(1)) - rowsOf(below) - (line === null ? 0 : 1)
       const probe = await sceneNow($, cols)
       walker.settle(probe.input) // asleep or not by now, before the caption says which
       // The size picked, or the biggest one that fits: a whole critter, never one cut in half.
-      const layout = (scale: number) => {
-        const caption = captionOf(probe, scale)
+      const layout = (shown: number) => {
+        const scale = SIZES[shown - 1]!
+        const caption = captionOf(probe, shown)
         const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
         const laneLeft = Math.min(cols, captionCols + CAPTION_GAP)
         const laneCols = Math.max(0, cols - laneLeft)
-        const fits = scale === 1 || (room >= BODY_ROWS * scale && laneCols >= SPRITE_COLS * scale)
-        return { scale, caption, captionCols, laneLeft, laneCols, fits }
+        const fits = shown === 1 || (room >= bodyRows(scale) && laneCols >= spriteCols(scale))
+        return { shown, scale, caption, captionCols, laneLeft, laneCols, fits }
       }
       let pick = layout(probe.size)
-      while (!pick.fits) pick = layout(pick.scale - 1)
-      const { scale, caption, captionCols, laneLeft, laneCols } = pick
-      if (room >= BODY_ROWS) {
-        const rows = Math.min(STRIP_ROWS * scale, room)
+      while (!pick.fits) pick = layout(pick.shown - 1)
+      const { shown, scale, caption, captionCols, laneLeft, laneCols } = pick
+      if (room >= bodyRows(scale)) {
+        const rows = Math.min(stripRows(scale), room)
         const sc = { ...probe, input: { ...probe.input, laneCols, scale } }
         walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
-        strip = { requestId: e.requestId, laneLeft, laneCols, rows, scale, size: probe.size, caption }
+        strip = { requestId: e.requestId, laneLeft, laneCols, rows, scale, shown, size: probe.size, caption }
         lastFrame = frameOf(sc, rows)
         top = (
           <Box width={cols} height={rows}>
