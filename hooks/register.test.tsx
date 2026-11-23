@@ -148,11 +148,12 @@ test('/critter away sends it off and brings it back', async ($, on) => {
 const TERM = { ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 30, bodyColumns: 100 } } as const
 const term = (props: Record<string, unknown> = {}) => ({ ...TERM, props: { ...TERM.props, ...props } }) as any
 
-async function startTerm($: any, clock: any, on: any) {
+async function startTerm($: any, clock: any, on: any, pictures = true) {
   const blits: any[] = []
   on('ui.blit', async (_: any, e: any) => {
     blits.push(e)
-    return { value: {} }
+    // A terminal that cannot show pictures draws the Image's alt, and refuses its blits.
+    return { value: e.source !== undefined && !pictures ? { deny: 'the Image draws its alt here' } : {} }
   })
   on('ui.message', async () => ({}) as any)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as any)
@@ -345,5 +346,41 @@ test('the pane picks a size', async ($, on) => {
   await pane.unmount()
   const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
   expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(15)
+  await ui.unmount()
+})
+
+test('a terminal that shows pictures gets the critter as a picture', async ($, on) => {
+  const clock = world(on)
+  mock.env(on, { TERM_PROGRAM: 'ghostty' })
+  await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const img: any = await ui.find({ type: 'Image' })
+  expect(img?.props.rows).toBe(7)
+  expect(img?.props.source.width).toBeGreaterThan(0)
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Windows Terminal and the rest get the text critter', async ($, on) => {
+  const clock = world(on)
+  mock.env(on, { WT_SESSION: 'x', TERM_PROGRAM: 'vscode' })
+  await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+  expect(await ui.find({ type: 'Raster' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a picture the terminal refuses turns into the text critter', async ($, on) => {
+  const clock = world(on)
+  mock.env(on, { TERM: 'xterm-kitty' })
+  await startTerm($, clock, on, false)
+  let ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Image' })).toBeDefined()
+  await clock.advance(500) // a tick's blit is refused
+  await ui.unmount()
+  ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+  expect(await ui.find({ type: 'Raster' })).toBeDefined()
   await ui.unmount()
 })

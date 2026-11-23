@@ -25,6 +25,11 @@ export const SIZES: readonly Look[] = [
   { art: ART, scale: 1, paint },
   { art: ART, scale: 1.5, paint },
 ]
+/**
+ * The same four boxes where the terminal shows real pictures: there the full critter fits every size
+ * in full detail, so size 1 is the full critter at 0.7 rather than the mini one.
+ */
+export const PICTURE_SIZES: readonly Look[] = [{ art: ART, scale: 0.7, paint }, ...SIZES.slice(1)]
 /** How wide, how tall, and how tall its body is, for a look. */
 export const spriteCols = (look: Look) => Math.ceil(look.art.w * look.scale)
 export const stripRows = (look: Look) => Math.ceil((look.art.h * look.scale) / 2)
@@ -90,6 +95,39 @@ export function encode(px: Uint8Array, laneCols: number, rows: number, x: number
     }
   }
   return out
+}
+
+/** Image pixels to a painted pixel; fewer when the lane is so wide the picture would pass 2048 across. */
+const PICTURE_PX = 3
+const PICTURE_MAX = 2048
+
+/**
+ * The same frame as `encode`, as RGBA for an Image over the whole lane: each painted pixel a
+ * square block, clear where nothing is painted. The terminal stretches it over `laneCols` x `rows`.
+ */
+export function picture(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): { rgba: Uint8Array; width: number; height: number } {
+  const across = Math.max(1, Math.round(laneCols / scale))
+  const down = Math.max(1, Math.round((rows * 2) / scale))
+  const k = Math.max(1, Math.min(PICTURE_PX, Math.floor(PICTURE_MAX / across)))
+  const width = across * k
+  const height = down * k
+  const rgba = new Uint8Array(width * height * 4)
+  const left = Math.round(x / scale)
+  const mirror = Math.round(2 * art.mid) - 1
+  for (let ay = 0; ay < down; ay++) {
+    const sy = art.h - down + ay
+    if (sy < 0 || sy >= art.h) continue
+    for (let ax = 0; ax < across; ax++) {
+      const sx = flip ? mirror - (ax - left) : ax - left
+      if (sx < 0 || sx >= art.w) continue
+      const v = px[sy * art.w + sx]!
+      if (v === 0) continue
+      const c = PALETTE[v]!
+      for (let dy = 0; dy < k; dy++)
+        for (let dx = 0; dx < k; dx++) rgba.set([(c >> 16) & 255, (c >> 8) & 255, c & 255, 255], ((ay * k + dy) * width + ax * k + dx) * 4)
+    }
+  }
+  return { rgba, width, height }
 }
 
 export type WalkInput = {

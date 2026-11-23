@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { ART, C, PALETTE, paint } from './critter-art'
 import type { Pose } from './critter-art'
-import { BODY_ROWS, DEFAULT_COLOR, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, spriteCols, stripRows } from './terminal'
+import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -165,5 +165,42 @@ test('no drawn cell ever takes the terminal text colour', () => {
       const cells = encode(look.paint({ ...IDLE, prop, hat: 3 }), spriteCols(look), stripRows(look), 0, false, look.scale, look.art)
       for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) expect(cells[i * 3 + 1]).not.toBe(DEFAULT_COLOR)
     }
+  }
+})
+
+const rgbaAt = (pic: { rgba: Uint8Array; width: number }, u: number, v: number) => Array.from(pic.rgba.slice((v * pic.width + u) * 4, (v * pic.width + u) * 4 + 4))
+const clayRGBA = [(PALETTE[C.CLAY]! >> 16) & 255, (PALETTE[C.CLAY]! >> 8) & 255, PALETTE[C.CLAY]! & 255, 255]
+
+test('a picture draws each pixel as a square block, clear where nothing is painted', () => {
+  const px = new Uint8Array(ART.w * ART.h)
+  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY // one pixel on the bottom row
+  const pic = picture(px, 40, STRIP_ROWS, 0, false)
+  expect([pic.width, pic.height]).toEqual([40 * 3, ART.h * 3])
+  const u = (0 - ART.col0) * 3
+  expect(rgbaAt(pic, u, pic.height - 1)).toEqual(clayRGBA)
+  expect(rgbaAt(pic, u + 2, pic.height - 3)).toEqual(clayRGBA)
+  expect(rgbaAt(pic, u + 3, pic.height - 1)).toEqual([0, 0, 0, 0])
+  expect(rgbaAt(pic, u, pic.height - 4)).toEqual([0, 0, 0, 0])
+})
+
+test('a picture walks and turns like the text critter', () => {
+  const px = new Uint8Array(ART.w * ART.h)
+  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY
+  const moved = picture(px, 40, STRIP_ROWS, 5, false)
+  expect(rgbaAt(moved, (5 - ART.col0) * 3, moved.height - 1)).toEqual(clayRGBA)
+  const flipped = picture(px, 40, STRIP_ROWS, 0, true)
+  expect(rgbaAt(flipped, (2 * ART.mid - 1 - (0 - ART.col0)) * 3, flipped.height - 1)).toEqual(clayRGBA)
+})
+
+test('a picture never passes the image size limit', () => {
+  const pic = picture(paint(IDLE), 512, STRIP_ROWS, 0, false, 13 / 18)
+  expect(pic.width).toBeLessThanOrEqual(2048)
+  expect(pic.rgba.length).toBe(pic.width * pic.height * 4)
+})
+
+test('picture sizes take the same boxes as text sizes, all drawn in full detail', () => {
+  for (let i = 0; i < 4; i++) {
+    expect([spriteCols(PICTURE_SIZES[i]!), stripRows(PICTURE_SIZES[i]!), bodyRows(PICTURE_SIZES[i]!)]).toEqual([spriteCols(SIZES[i]!), stripRows(SIZES[i]!), bodyRows(SIZES[i]!)])
+    expect(PICTURE_SIZES[i]!.art).toBe(ART)
   }
 })

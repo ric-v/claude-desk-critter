@@ -3,7 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
 import type { Prop } from './critter-art'
-import { SIZES, Walker, bodyRows, encode, spriteCols, stripRows } from './terminal'
+import { PICTURE_SIZES, SIZES, Walker, bodyRows, encode, picture, spriteCols, stripRows } from './terminal'
 import type { Look } from './terminal'
 import type { WalkInput } from './terminal'
 
@@ -324,7 +324,9 @@ const DOING: Record<CritterAct, string> = {
 const walker = new Walker()
 // The strip as last drawn; null while none is on screen, which also stops the tick.
 // `look` is how the shown size draws; `shown` that size (1-4), `size` the one picked.
-let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; look: Look; shown: number; size: number; caption: string } | null = null
+let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; look: Look; shown: number; size: number; caption: string; pic: boolean } | null = null
+// Whether this terminal shows real pictures: unknown until the first strip, false for the session once one is refused.
+let pictures: boolean | null = null
 let tickTimer: Timer | undefined
 let tickEvery = 0
 let lastFrame = ''
@@ -377,11 +379,32 @@ async function readScene($: EngineInterface, now: number, laneCols: number): Pro
 const captionOf = (sc: Scene, shown = sc.size) =>
   `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${shown !== sc.size ? ` · size ${shown}` : ''}`
 
-/** The Raster's cells: the encoded frame's bytes, base64. */
-function frameOf(sc: Scene, rows: number, look: Look): string {
+const toBase64 = (bytes: Uint8Array) => (bytes as unknown as { toBase64: () => string }).toBase64()
+
+/** The frame: the Raster's cells, or the Image's RGBA, base64; `data` tells one frame from the next. */
+function frameOf(sc: Scene, rows: number, look: Look, pic: boolean): { data: string; width: number; height: number } {
   const px = look.paint(walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat))
+  if (pic) {
+    const { rgba, width, height } = picture(px, sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
+    return { data: toBase64(rgba), width, height }
+  }
   const cells = encode(px, sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
-  return (new Uint8Array(cells.buffer) as unknown as { toBase64: () => string }).toBase64()
+  return { data: toBase64(new Uint8Array(cells.buffer)), width: 0, height: 0 }
+}
+
+/**
+ * Terminals that draw a mod's Image: kitty, Ghostty, iTerm2 and WezTerm, by the variables they set.
+ * Windows Terminal and the rest get the text critter; so does any terminal that refuses a picture.
+ */
+async function canShowPictures($: EngineInterface): Promise<boolean> {
+  if (pictures !== null) return pictures
+  // Each name is spelled out: the engine lists the variables a module reads from its calls.
+  const or = (p: Promise<string | undefined>) => Promise.resolve(p).then(v => v ?? '', () => '')
+  const term = await or($.env.get('TERM'))
+  const program = await or($.env.get('TERM_PROGRAM'))
+  const kitty = await or($.env.get('KITTY_WINDOW_ID'))
+  pictures = kitty !== '' || term.includes('kitty') || term.includes('ghostty') || ['ghostty', 'iTerm.app', 'WezTerm'].includes(program)
+  return pictures
 }
 
 function stopTick() {
@@ -410,12 +433,19 @@ async function tick($: EngineInterface) {
     // The caption and the size set the layout, so a change to either is a new render rather than a blit.
     $.ui.invalidate('ui.render')
   } else {
-    const cells = frameOf(sc, now.rows, now.look)
-    if (cells !== lastFrame) {
-      lastFrame = cells
-      await Promise.resolve($.ui.blit({ requestId: now.requestId, key: STRIP_KEY, columns: now.laneCols, rows: now.rows, cells } as any)).catch(() => {
+    const frame = frameOf(sc, now.rows, now.look, now.pic)
+    if (frame.data !== lastFrame) {
+      lastFrame = frame.data
+      const what = now.pic ? { source: { rgba: frame.data, width: frame.width, height: frame.height } } : { cells: frame.data }
+      const done: { deny?: string } | undefined = await Promise.resolve($.ui.blit({ requestId: now.requestId, key: STRIP_KEY, columns: now.laneCols, rows: now.rows, ...what } as any)).catch(() => {
         strip = null // the strip is gone: stop until it is drawn again
+        return undefined
       })
+      if (now.pic && done?.deny !== undefined) {
+        // The terminal draws the Image's alt: it cannot show pictures, so the text critter it is.
+        pictures = false
+        $.ui.invalidate('ui.render')
+      }
     }
   }
   pace($)
@@ -580,7 +610,7 @@ export const register: Register = on => {
       return next(e)
     }
     const below = await next(e)
-    const { Box, Text, Button, Raster, Client } = $.ui.resolve(e) as any
+    const { Box, Text, Button, Raster, Image, Client } = $.ui.resolve(e) as any
     const r = await read($, reminder)
     const words = r === 'water' ? 'Your critter brought you some water. Take a sip?' : 'Your critter made coffee. Time for a short break?'
     const line =
@@ -602,10 +632,12 @@ export const register: Register = on => {
       const cols = Math.max(1, Math.min(512, Number((e.props as any).bodyColumns) || 80))
       const room = Number((e.props as any).maxRows ?? stripRows(SIZES[0]!)) - rowsOf(below) - (line === null ? 0 : 1)
       const probe = await sceneNow($, cols)
+      const pic = await canShowPictures($)
+      const sizes = pic ? PICTURE_SIZES : SIZES
       walker.settle(probe.input) // asleep or not by now, before the caption says which
       // The size picked, or the biggest one that fits: a whole critter, never one cut in half.
       const layout = (shown: number) => {
-        const look = SIZES[shown - 1]!
+        const look = sizes[shown - 1]!
         const caption = captionOf(probe, shown)
         const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
         const laneLeft = Math.min(cols, captionCols + CAPTION_GAP)
@@ -620,8 +652,9 @@ export const register: Register = on => {
         const rows = Math.min(stripRows(look), room)
         const sc = { ...probe, input: { ...probe.input, laneCols, scale: look.scale, sprite: spriteCols(look) } }
         walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
-        strip = { requestId: e.requestId, laneLeft, laneCols, rows, look, shown, size: probe.size, caption }
-        lastFrame = frameOf(sc, rows, look)
+        strip = { requestId: e.requestId, laneLeft, laneCols, rows, look, shown, size: probe.size, caption, pic }
+        const frame = frameOf(sc, rows, look, pic)
+        lastFrame = frame.data
         top = (
           <Box width={cols} height={rows}>
             <Box position="absolute" bottom={0} left={0} width={captionCols}>
@@ -630,7 +663,11 @@ export const register: Register = on => {
               </Text>
             </Box>
             <Box position="absolute" bottom={0} left={laneLeft}>
-              <Raster key={STRIP_KEY} columns={laneCols} rows={rows} cells={lastFrame} />
+              {pic ? (
+                <Image key={STRIP_KEY} columns={laneCols} rows={rows} source={{ rgba: frame.data, width: frame.width, height: frame.height }} alt=" " />
+              ) : (
+                <Raster key={STRIP_KEY} columns={laneCols} rows={rows} cells={frame.data} />
+              )}
             </Box>
             <Box position="absolute" top={0} left={0}>
               <Client key="touch" module="./touch.tsx" width={cols} height={rows} />
