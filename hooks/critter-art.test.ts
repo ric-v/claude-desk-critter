@@ -34,7 +34,7 @@ test('hop lifts one row', () => {
   expect(at(hop, 6, 0)).toBe(at(idle, 6, 1))
   expect(at(idle, 6, -1)).toBe(0)
   expect(at(hop, 6, -1)).toBe(C.CLAY)
-  expect(at(hop, 2, 9)).toBe(0)
+  expect(at(hop, 2, 9)).not.toBe(C.CLAY) // the leg lifted off the ground; its shadow stays
 })
 
 test('nothing outside the critter at rest', () => {
@@ -109,4 +109,19 @@ test('every mini prop and hat shows', () => {
   for (const prop of ['type', 'read', 'search', 'web', 'shell', 'think', 'ask', 'party', 'sad', 'dance', 'sparkler', 'nap', 'zoomies', 'water', 'coffee', 'hearts'] as const)
     expect(paintMini({ ...IDLE, prop }).join()).not.toBe(idle)
   for (let hat = 1; hat <= 7; hat++) expect(countMini(paintMini({ ...IDLE, hat }), (_, gy, v) => gy < 0 && v !== 0)).toBeGreaterThan(0)
+})
+
+test('the body is shaded underneath and a shadow sits under its feet', () => {
+  const px = paint(IDLE)
+  expect(at(px, 6, 6)).toBe(C.EMBER) // the underside
+  expect(at(px, 6, 1)).toBe(C.CLAY) // the top stays lit
+  expect(at(px, 3, 9)).toBe(C.SHADOW) // between the legs, on the ground
+  expect(at(paint({ ...IDLE, hop: 1 }), 3, 9)).toBe(C.SHADOW) // the shadow stays down when it hops
+})
+
+test('the mini critter is shaded and casts a shadow', () => {
+  const px = paintMini(IDLE)
+  expect(atMini(px, 4, 3)).toBe(C.EMBER)
+  expect(atMini(px, 4, 0)).toBe(C.CLAY)
+  expect(atMini(px, 2, 5)).toBe(C.SHADOW)
 })

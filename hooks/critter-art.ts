@@ -33,6 +33,7 @@ export const PALETTE: readonly number[] = [
   rgb(0.36, 0.55, 0.94), // BLUE
   rgb(0.42, 0.33, 0.72), // PURPLE
   rgb(0.46, 0.53, 0.78), // NIGHTCAP
+  rgb(0.24, 0.23, 0.22), // SHADOW: the terminal's own, under its feet
 ]
 
 /** Palette indexes by name. */
@@ -50,6 +51,7 @@ export const C = {
   BLUE: 11,
   PURPLE: 12,
   NIGHTCAP: 13,
+  SHADOW: 14,
 } as const
 
 export type Eyes = 'open' | 'blink' | 'lidded' | 'shut' | 'happy' | 'crossed'
@@ -343,8 +345,16 @@ export function paint(pose: Pose): Uint8Array {
   const cv = new Canvas()
   cv.lift = pose.hop
   const body = critterMask(pose)
+  // Its shadow stays on the ground when it hops; the web cloud takes its place.
+  if (pose.prop !== 'web') {
+    cv.lift = 0
+    cv.fill(C.SHADOW, box(1, 12, 9, 10))
+    cv.lift = pose.hop
+  }
   paintBehind(cv, pose)
   cv.fill(C.CLAY, body)
+  // Lit from the top left: the underside and the far side a shade darker.
+  cv.fill(C.EMBER, (x, y) => box(1, 12, 0, 7)(x, y) && (y >= 6 || x >= 11) && y >= 1)
   cv.fill(C.INK, (x, y) => body(x, y) && eyesMask(pose.eyes)(x, y))
   paintProp(cv, pose, body)
   paintHat(cv, pose)
@@ -369,6 +379,9 @@ export function paintMini(p: Pose): Uint8Array {
   }
   const blink = (rate: number, phase = 0) => Math.floor(p.t * rate + phase) % 2 === 0
 
+  // Its shadow, on the ground whether or not it hops; the web cloud takes its place.
+  if (p.prop !== 'web') for (let x = 0; x <= 8; x++) px[(5 - MINI.row0) * MINI.w + (x - MINI.col0)] = C.SHADOW
+
   // Behind it: the web cloud, the rain cloud.
   if (p.prop === 'web') {
     row(-1, 9, 5, C.STONE)
@@ -387,6 +400,10 @@ export function paintMini(p: Pose): Uint8Array {
   row(0, 8, 1, C.CLAY)
   row(0, 8, 2, C.CLAY)
   row(1, 7, 3, C.CLAY)
+  // Lit from the top left: the underside and the far side a shade darker.
+  row(1, 7, 3, C.EMBER)
+  dot(8, 1, C.EMBER)
+  dot(8, 2, C.EMBER)
   const stride = p.dancing ? (blink(2.5) ? 0 : 1) : p.stride
   if (p.prop !== 'web') {
     for (const x of [1, 3, 5, 7]) dot(x, 4, C.CLAY)

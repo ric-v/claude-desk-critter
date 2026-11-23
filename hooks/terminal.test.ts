@@ -138,7 +138,8 @@ test('flip keeps the mini body in place', () => {
   const clayCols = (flip: boolean) => {
     const cells = encode(look.paint(IDLE), 20, stripRows(look), 0, flip, 1, look.art)
     const cols = new Set<number>()
-    for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3 + 1] === PALETTE[C.CLAY] || cells[i * 3 + 2] === PALETTE[C.CLAY]) cols.add(i % 20)
+    const body = [PALETTE[C.CLAY], PALETTE[C.EMBER]] // lit or shaded, it is all body
+    for (let i = 0; i < cells.length / 3; i++) if (body.includes(cells[i * 3 + 1]) || body.includes(cells[i * 3 + 2])) cols.add(i % 20)
     return [...cols].sort((a, b) => a - b).join()
   }
   expect(clayCols(true)).toBe(clayCols(false))
@@ -149,4 +150,20 @@ test('a small critter fits its lane', () => {
   w.x = 50
   w.step({ ...IN, laneCols: 30, sprite: spriteCols(SIZES[0]!) })
   expect(w.x).toBeLessThanOrEqual(30 - spriteCols(SIZES[0]!))
+})
+
+test('a cell with only its bottom half painted is a lower half block on the terminal background', () => {
+  const px = new Uint8Array(ART.w * ART.h)
+  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY
+  const cells = encode(px, 40, STRIP_ROWS, 0, false)
+  expect(cell(cells, 40, STRIP_ROWS - 1, 0 - ART.col0)).toEqual([0x2584, PALETTE[C.CLAY]!, DEFAULT_COLOR])
+})
+
+test('no drawn cell ever takes the terminal text colour', () => {
+  for (const look of SIZES) {
+    for (const prop of ['none', 'type', 'ask', 'party', 'web'] as const) {
+      const cells = encode(look.paint({ ...IDLE, prop, hat: 3 }), spriteCols(look), stripRows(look), 0, false, look.scale, look.art)
+      for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) expect(cells[i * 3 + 1]).not.toBe(DEFAULT_COLOR)
+    }
+  }
 })

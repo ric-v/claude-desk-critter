@@ -15,11 +15,14 @@ export const SPRITE_COLS = ART.w
 
 /** How a size draws: which painting, at how many columns (and half-rows) per pixel. */
 export type Look = { art: Art; scale: number; paint: (pose: Pose) => Uint8Array }
-/** The four sizes `/critter size` picks from: the hand-drawn mini critter, then the full one at 0.72, 1.11 and 1.5. */
+/**
+ * The four sizes `/critter size` picks from: the hand-drawn mini critter, then the full one at 0.72, 1
+ * and 1.5. Scales between whole numbers smear one-pixel eyes, so size 3 is exactly 1, not 1.11.
+ */
 export const SIZES: readonly Look[] = [
   { art: MINI, scale: 1, paint: paintMini },
   { art: ART, scale: 13 / 18, paint },
-  { art: ART, scale: 10 / 9, paint },
+  { art: ART, scale: 1, paint },
   { art: ART, scale: 1.5, paint },
 ]
 /** How wide, how tall, and how tall its body is, for a look. */
@@ -29,6 +32,7 @@ export const bodyRows = (look: Look) => Math.max(1, Math.ceil((look.art.bodyPx *
 
 const SPACE = 0x20
 const UPPER_HALF = 0x2580
+const LOWER_HALF = 0x2584
 
 /**
  * The colour a region of the painting reads as, at any scale. Detail wins: a prop's or an eye's
@@ -58,7 +62,7 @@ const colorOf = (v: number) => (v === 0 ? DEFAULT_COLOR : PALETTE[v]!)
 
 /**
  * The bottom `rows` cell rows of a painting, its left edge at lane column `x`, as Raster cells:
- * `[codepoint, fg, bg]` per cell, ▀ with the top half as fg and the bottom half as bg. At `scale`
+ * `[codepoint, fg, bg]` per cell, ▀ with the top half as fg and the bottom half as bg (▄ when only the bottom is painted). At `scale`
  * each pixel takes that many columns and half-rows. Mirrored about the body, so it keeps its columns.
  */
 export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint32Array {
@@ -78,7 +82,11 @@ export function encode(px: Uint8Array, laneCols: number, rows: number, x: number
       const [x0, x1] = flip ? [mirror - b, mirror - a] : [a, b]
       const hi = sample(px, art, x0, x1, ...top)
       const lo = sample(px, art, x0, x1, ...bottom)
-      out.set(hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)], (row * laneCols + col) * 3)
+      // The glyph's ink is always a painted colour: an empty top half is the terminal's background
+      // under ▄, never its text colour on top of ▀ (which most terminals draw white).
+      const cellOf: [number, number, number] =
+        hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : hi === 0 ? [LOWER_HALF, colorOf(lo), DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)]
+      out.set(cellOf, (row * laneCols + col) * 3)
     }
   }
   return out
