@@ -1,8 +1,8 @@
 # desk-critter
 
-A little orange pixel critter that lives in the Claude desktop app's backdrop and walks around your prompt box. It follows what Claude is doing, loves being petted, can be picked up and thrown, levels up as you work together, wears hats, and reminds you to drink water.
+A little orange pixel critter that lives in the Claude desktop app's backdrop and walks around your prompt box, and in a terminal walks a strip just above your prompt. It follows what Claude is doing, loves being petted, can be picked up and thrown, levels up as you work together, wears hats, and reminds you to drink water.
 
-It's a Claude Code mod: a hooks module plus a GPU shader, with no server and nothing sent anywhere.
+It's a Claude Code mod: a hooks module, a GPU shader for the desktop and a character-cell painter for the terminal, with no server and nothing sent anywhere.
 
 ## Install
 
@@ -32,7 +32,7 @@ Needs Claude Code 2.1.330 or newer.
 |---|---|
 | Desktop app | The full critter in the backdrop, plus the pane and reminders |
 | Mobile app | A still picture of the critter (the app plays no shaders) |
-| Terminal | The `/critter` pane and reminders only: a terminal has no backdrop |
+| Terminal | The critter in a strip above the prompt, drawn in half-block characters, plus the `/critter` pane and reminders |
 
 The critter sets the app's backdrop, which is part of the theme, so while it's on it replaces any other theme's backdrop. `/critter away` gives the backdrop back.
 
@@ -44,6 +44,7 @@ The critter sets the app's backdrop, which is part of the theme, so while it's o
 
 - Rest the pointer on it and it stops to look at you.
 - Rub the pointer back and forth over it to pet it: hearts, then happy eyes and a hop.
+- In a terminal, click it to pet it.
 - Press and drag to pick it up; it dangles from the pointer. Let go to throw it: it bounces off the window's edges, lands on the prompt box or walks back to it from the bottom, opens an umbrella when it falls from high up, and sees stars after a hard landing.
 
 **With Claude**, it goes to the top of the prompt box and acts out the work:
@@ -79,6 +80,9 @@ It reads tool names from the same events settings hooks get, so it never changes
 
 - `hooks/register.tsx` is the hooks module: it follows the session, keeps stats and settings, draws the pane and the reminder line, and sets the backdrop.
 - `hooks/critter-shader.ts` is the scene, in Claude Code's shader language. A state pass runs the walk and the physics (gravity, bounces, the umbrella) from the pointers the app feeds it. A pose pass works out where the critter is once a frame. An art pass paints the critter and its props on its own small grid. The picture pass looks that grid up for each pixel, which keeps it sharp and cheap.
+- `hooks/critter-art.ts` paints the same critter on the CPU, on the shader's own grid and in its colours, for surfaces with no shader.
+- `hooks/terminal.ts` turns that painting into half-block cells (two pixels a cell) and walks the critter along the strip; asleep after a few quiet minutes, it stops redrawing.
+- `hooks/touch.tsx` makes the strip clickable, so a click on the critter pets it.
 - The mod tells the shader what to show through a handful of eased values. A prop or hat only changes while it is faded out, so you never see the in-between ones.
 - Where no shader plays (Reduce Motion, mobile, a slow GPU), a still picture of the critter in the corner shows instead.
 

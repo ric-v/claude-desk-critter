@@ -1,6 +1,6 @@
 {
   "name": "desk-critter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pixel critter that lives in the app's backdrop and walks around the prompt box, watching your pointer and loving pets",
   "types": "./types/index.d.ts"
 }
