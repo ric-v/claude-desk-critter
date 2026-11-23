@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ART, C, paint } from './critter-art'
+import { ART, C, MINI, paint, paintMini } from './critter-art'
 import type { Pose } from './critter-art'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -81,4 +81,32 @@ test('water holds a bottle, coffee a mug', () => {
 
 test('hearts are rose above its head', () => {
   expect(count(paint({ ...IDLE, prop: 'hearts', eyes: 'happy' }), (_, gy, v) => gy < 0 && v === C.ROSE)).toBeGreaterThan(0)
+})
+
+// ---- The mini critter, drawn by hand for the smallest size.
+const atMini = (px: Uint8Array, gx: number, gy: number) => px[(gy - MINI.row0) * MINI.w + (gx - MINI.col0)]
+const countMini = (px: Uint8Array, keep: (gx: number, gy: number, v: number) => boolean) => {
+  let n = 0
+  for (let r = 0; r < MINI.h; r++) for (let c = 0; c < MINI.w; c++) if (keep(MINI.col0 + c, MINI.row0 + r, px[r * MINI.w + c]!)) n++
+  return n
+}
+
+test('the mini critter has a clay body, two eyes and legs', () => {
+  const px = paintMini(IDLE)
+  expect(atMini(px, 4, 2)).toBe(C.CLAY)
+  expect(atMini(px, 2, 1)).toBe(C.INK)
+  expect(atMini(px, 6, 1)).toBe(C.INK)
+  expect(atMini(px, 1, 4)).toBe(C.CLAY)
+})
+
+test('the mini critter steps and hops', () => {
+  expect(paintMini({ ...IDLE, stride: 0 }).join()).not.toBe(paintMini({ ...IDLE, stride: 1 }).join())
+  expect(atMini(paintMini({ ...IDLE, hop: 1 }), 4, -1)).toBe(C.CLAY)
+})
+
+test('every mini prop and hat shows', () => {
+  const idle = paintMini(IDLE).join()
+  for (const prop of ['type', 'read', 'search', 'web', 'shell', 'think', 'ask', 'party', 'sad', 'dance', 'sparkler', 'nap', 'zoomies', 'water', 'coffee', 'hearts'] as const)
+    expect(paintMini({ ...IDLE, prop }).join()).not.toBe(idle)
+  for (let hat = 1; hat <= 7; hat++) expect(countMini(paintMini({ ...IDLE, hat }), (_, gy, v) => gy < 0 && v !== 0)).toBeGreaterThan(0)
 })

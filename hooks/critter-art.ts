@@ -3,8 +3,17 @@
 // grid y grows down, the top of its head is row 0, its feet stand on row 10. Each grid pixel is
 // sampled at its centre, so a shape covers a pixel when it covers that pixel's middle.
 
-/** The painted canvas: grid columns col0..col0+w-1, rows row0..row0+h-1. */
-export const ART = { col0: -6, row0: -10, w: 30, h: 20 } as const // feet on the last row
+/**
+ * A painted canvas: grid columns col0..col0+w-1, rows row0..row0+h-1, its feet on the last row.
+ * `mid` is the canvas x the body mirrors about, `bodyFrom`..`bodyTo` the canvas columns the body
+ * spans, `bodyPx` how many bottom rows the body and legs take.
+ */
+export type Art = { col0: number; row0: number; w: number; h: number; mid: number; bodyFrom: number; bodyTo: number; bodyPx: number }
+
+/** The full critter: the shader's own grid. */
+export const ART = { col0: -6, row0: -10, w: 30, h: 20, mid: 12.5, bodyFrom: 6, bodyTo: 18, bodyPx: 10 } as const
+/** The mini critter, drawn by hand for the smallest size: a 9 x 6 body with room for hats and props. */
+export const MINI = { col0: -2, row0: -4, w: 14, h: 10, mid: 6.5, bodyFrom: 2, bodyTo: 10, bodyPx: 6 } as const
 
 const rgb = (r: number, g: number, b: number) => (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)
 
@@ -340,4 +349,214 @@ export function paint(pose: Pose): Uint8Array {
   paintProp(cv, pose, body)
   paintHat(cv, pose)
   return cv.px
+}
+
+// ---- The mini critter. Shrinking the full art loses everything that makes it a critter, so the
+// smallest size is drawn by hand, pixel by pixel: grid x 0..8 is the body, grid y 0..3 the body
+// and 4..5 the legs; hats and props sit around it.
+
+/** Paint the mini critter, facing right: MINI.w x MINI.h palette indexes, row-major. */
+export function paintMini(p: Pose): Uint8Array {
+  const px = new Uint8Array(MINI.w * MINI.h)
+  const lift = p.hop
+  const dot = (gx: number, gy: number, color: number) => {
+    const r = gy - lift - MINI.row0
+    const c = gx - MINI.col0
+    if (r >= 0 && r < MINI.h && c >= 0 && c < MINI.w) px[r * MINI.w + c] = color
+  }
+  const row = (x0: number, x1: number, gy: number, color: number) => {
+    for (let x = x0; x <= x1; x++) dot(x, gy, color)
+  }
+  const blink = (rate: number, phase = 0) => Math.floor(p.t * rate + phase) % 2 === 0
+
+  // Behind it: the web cloud, the rain cloud.
+  if (p.prop === 'web') {
+    row(-1, 9, 5, C.STONE)
+    row(0, 8, 5, C.PAPER)
+    row(1, 7, 4, C.PAPER)
+  }
+  if (p.prop === 'sad') {
+    row(2, 6, -3, C.STONE)
+    row(3, 5, -4, C.STONE)
+    dot(blink(2) ? 3 : 5, -2, C.BLUE)
+    dot(blink(2) ? 5 : 3, -1, C.BLUE)
+  }
+
+  // Body, nubs, legs that step (or tap along while dancing).
+  row(1, 7, 0, C.CLAY)
+  row(0, 8, 1, C.CLAY)
+  row(0, 8, 2, C.CLAY)
+  row(1, 7, 3, C.CLAY)
+  const stride = p.dancing ? (blink(2.5) ? 0 : 1) : p.stride
+  if (p.prop !== 'web') {
+    for (const x of [1, 3, 5, 7]) dot(x, 4, C.CLAY)
+    for (const x of stride === 0 ? [1, 5] : [3, 7]) dot(x, 5, C.CLAY)
+  }
+
+  // Eyes: open two pixels tall; happy up high; shut, lidded or blinking a low line.
+  if (p.eyes === 'happy') {
+    dot(2, 1, C.INK)
+    dot(6, 1, C.INK)
+  } else if (p.eyes === 'shut' || p.eyes === 'lidded' || p.eyes === 'blink') {
+    dot(2, 2, C.INK)
+    dot(6, 2, C.INK)
+  } else {
+    for (const y of [1, 2]) {
+      dot(2, y, C.INK)
+      dot(6, y, C.INK)
+    }
+  }
+
+  // Its arm: out front to hold something, up to wave.
+  if (p.arm === 'holding') dot(9, 2, C.CLAY)
+  if (p.arm === 'raised' || p.arm === 'wave') {
+    dot(9, 0, C.CLAY)
+    dot(p.arm === 'wave' && blink(2.5) ? 10 : 9, -1, C.CLAY)
+  }
+
+  // What it holds or does.
+  switch (p.prop) {
+    case 'type':
+      row(10, 11, 0, C.STONE)
+      dot(10, 1, C.SKY)
+      dot(11, 1, C.STONE)
+      row(9, 11, 3, C.STONE)
+      break
+    case 'shell':
+      for (const y of [0, 1, 2, 3]) row(10, 11, y, C.NIGHT)
+      dot(10, 1, C.LEAF)
+      if (blink(1.2)) dot(11, 2, C.LEAF)
+      break
+    case 'read':
+      row(1, 7, 3, C.PAPER)
+      dot(4, 3, C.STONE)
+      row(3, 5, 1, C.INK) // the glasses' bridge between its eyes
+      break
+    case 'search': {
+      const x = blink(1) ? 10 : 9
+      row(x, x + 2, -2, C.INK)
+      dot(x, -1, C.INK)
+      dot(x + 1, -1, C.SKY)
+      dot(x + 2, -1, C.INK)
+      row(x, x + 2, 0, C.INK)
+      dot(x - 1, 1, C.INK)
+      break
+    }
+    case 'think':
+      if (blink(2)) {
+        dot(4, -3, C.EMBER)
+        row(3, 5, -2, C.EMBER)
+        dot(4, -1, C.EMBER)
+      } else {
+        dot(3, -3, C.EMBER)
+        dot(5, -3, C.EMBER)
+        dot(4, -2, C.EMBER)
+        dot(3, -1, C.EMBER)
+        dot(5, -1, C.EMBER)
+      }
+      break
+    case 'ask':
+      for (const y of [-4, -3, -2, -1]) row(3, 5, y, C.PAPER)
+      dot(4, -4, C.INK)
+      dot(4, -3, C.INK)
+      dot(4, -1, C.INK)
+      break
+    case 'party': {
+      dot(4, -4, C.ROSE)
+      dot(4, -3, C.GOLD)
+      row(3, 5, -2, C.BLUE)
+      row(2, 6, -1, C.GOLD)
+      const tints = [C.GOLD, C.BLUE, C.ROSE]
+      for (let i = 0; i < 4; i++) dot(((i * 4 + Math.floor(p.t * 3)) % 13) - 2, -4 + ((i + Math.floor(p.t * 4)) % 4), tints[i % 3]!)
+      break
+    }
+    case 'dance':
+      for (const y of [-3, -2, -1]) dot(10, y, C.INK)
+      dot(9, -1, C.INK)
+      dot(11, blink(3) ? -3 : -2, C.INK)
+      break
+    case 'sparkler':
+      dot(10, 1, C.STONE)
+      dot(10, 0, C.STONE)
+      dot(blink(4) ? 10 : 11, -1, C.GOLD)
+      dot(blink(4) ? 11 : 9, -2, C.GOLD)
+      break
+    case 'nap': {
+      const y = blink(0.5) ? -2 : -3
+      row(9, 11, y - 2, C.INK)
+      dot(10, y - 1, C.INK)
+      row(9, 11, y, C.INK)
+      break
+    }
+    case 'zoomies':
+      row(-2, -1, 1, C.STONE)
+      row(-2, -1, 3, C.STONE)
+      break
+    case 'water':
+      dot(10, -1, C.BLUE)
+      for (const y of [0, 1, 2, 3]) dot(10, y, y === 0 ? C.PAPER : C.SKY)
+      dot(11, 1, C.PAPER)
+      break
+    case 'coffee':
+      row(10, 11, 1, C.EMBER)
+      row(10, 11, 2, C.PAPER)
+      row(10, 11, 3, C.PAPER)
+      dot(blink(2) ? 10 : 11, -1, C.STONE)
+      dot(blink(2) ? 11 : 10, 0, C.STONE)
+      break
+    case 'hearts': {
+      const y = blink(2) ? -3 : -4
+      dot(3, y, C.ROSE)
+      dot(5, y, C.ROSE)
+      row(3, 5, y + 1, C.ROSE)
+      dot(4, y + 2, C.ROSE)
+      break
+    }
+  }
+
+  // The hat, set aside for the party hat and the speech bubble.
+  if (p.prop !== 'party' && p.prop !== 'ask') {
+    switch (p.hat) {
+      case 1: // beanie
+        row(1, 7, -1, C.BLUE)
+        row(2, 6, -2, C.BLUE)
+        dot(4, -3, C.PAPER)
+        break
+      case 2: // flower crown
+        row(1, 7, -1, C.LEAF)
+        dot(2, -1, C.ROSE)
+        dot(4, -1, C.GOLD)
+        dot(6, -1, C.PAPER)
+        break
+      case 3: // wizard
+        row(1, 7, -1, C.PURPLE)
+        row(2, 6, -2, C.PURPLE)
+        row(3, 5, -3, C.PURPLE)
+        dot(4, -4, C.PURPLE)
+        dot(4, -2, C.GOLD)
+        break
+      case 4: // crown
+        row(2, 6, -1, C.GOLD)
+        for (const x of [2, 4, 6]) dot(x, -2, C.GOLD)
+        dot(4, -1, C.ROSE)
+        break
+      case 5: // nightcap
+      case 6: {
+        // santa
+        const cap = p.hat === 5 ? C.NIGHTCAP : C.ROSE
+        row(1, 7, -1, p.hat === 6 ? C.PAPER : cap)
+        row(1, 5, -2, cap)
+        row(0, 2, -3, cap)
+        dot(-1, -3, C.PAPER)
+        break
+      }
+      case 7: // witch
+        row(0, 8, -1, C.NIGHT)
+        row(3, 5, -2, C.NIGHT)
+        row(4, 5, -3, C.NIGHT)
+        dot(5, -4, C.NIGHT)
+        break
+    }
+  }
+  return px
 }

@@ -114,40 +114,39 @@ test('scale 2 doubles each pixel', () => {
 test('a bigger critter needs a wider lane', () => {
   const w = new Walker(1)
   w.x = 70
-  w.step({ ...IN, laneCols: 100, scale: 2 })
-  expect(w.x).toBeLessThanOrEqual(100 - spriteCols(2))
+  w.step({ ...IN, laneCols: 100, sprite: SPRITE_COLS * 2 })
+  expect(w.x).toBeLessThanOrEqual(100 - SPRITE_COLS * 2)
 })
 
-test('size 1 is a third of the full critter, size 4 one and a half times', () => {
-  expect(spriteCols(SIZES[0])).toBe(10)
-  expect(stripRows(SIZES[0])).toBe(4)
-  expect(spriteCols(SIZES[3])).toBe(45)
-  expect(stripRows(SIZES[3])).toBe(15)
-  expect(bodyRows(SIZES[0])).toBe(2)
+test('size 1 is the mini critter; size 4 one and a half times the full one', () => {
+  expect(spriteCols(SIZES[0]!)).toBe(14)
+  expect(stripRows(SIZES[0]!)).toBe(5)
+  expect(bodyRows(SIZES[0]!)).toBe(3)
+  expect(spriteCols(SIZES[3]!)).toBe(45)
+  expect(stripRows(SIZES[3]!)).toBe(15)
 })
 
-test('a small critter keeps its eyes, in quarter blocks', () => {
-  const f = SIZES[0]
-  const cols = spriteCols(f)
-  const cells = encode(paint(IDLE), cols, stripRows(f), 0, false, f)
-  let ink = false
-  for (let i = 0; i < cells.length / 3; i++) {
-    const [ch, fg, bg] = [cells[i * 3]!, cells[i * 3 + 1]!, cells[i * 3 + 2]!]
-    expect(ch === 0x20 || (ch >= 0x2580 && ch <= 0x259f)).toBe(true)
-    if (fg === PALETTE[C.INK] || bg === PALETTE[C.INK]) ink = true
-  }
-  expect(ink).toBe(true)
-})
-
-test('a small critter still has a clay body', () => {
-  const f = SIZES[0]
-  const cells = encode(paint(IDLE), spriteCols(f), stripRows(f), 0, false, f)
+test('the mini critter draws with its eyes in half blocks', () => {
+  const look = SIZES[0]!
+  const cells = encode(look.paint(IDLE), spriteCols(look), stripRows(look), 0, false, look.scale, look.art)
+  expect(cells.some((v, i) => i % 3 !== 0 && v === PALETTE[C.INK])).toBe(true)
   expect(cells.some((v, i) => i % 3 !== 0 && v === PALETTE[C.CLAY])).toBe(true)
+})
+
+test('flip keeps the mini body in place', () => {
+  const look = SIZES[0]!
+  const clayCols = (flip: boolean) => {
+    const cells = encode(look.paint(IDLE), 20, stripRows(look), 0, flip, 1, look.art)
+    const cols = new Set<number>()
+    for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3 + 1] === PALETTE[C.CLAY] || cells[i * 3 + 2] === PALETTE[C.CLAY]) cols.add(i % 20)
+    return [...cols].sort((a, b) => a - b).join()
+  }
+  expect(clayCols(true)).toBe(clayCols(false))
 })
 
 test('a small critter fits its lane', () => {
   const w = new Walker(1)
   w.x = 50
-  w.step({ ...IN, laneCols: 30, scale: SIZES[0] })
-  expect(w.x).toBeLessThanOrEqual(30 - spriteCols(SIZES[0]))
+  w.step({ ...IN, laneCols: 30, sprite: spriteCols(SIZES[0]!) })
+  expect(w.x).toBeLessThanOrEqual(30 - spriteCols(SIZES[0]!))
 })

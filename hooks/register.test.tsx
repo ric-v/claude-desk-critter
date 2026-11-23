@@ -165,7 +165,7 @@ test('terminal shows the critter strip', async ($, on) => {
   await startTerm($, clock, on)
   const ui = await $.ui.mount(term())
   const raster: any = await ui.find({ type: 'Raster' })
-  expect(raster?.props.rows).toBe(4) // size 1, the smallest: a third of the full critter
+  expect(raster?.props.rows).toBe(5) // size 1: the mini critter
   expect(await ui.find({ type: 'Text', text: /critter Lv 0/ })).toBeDefined()
   await ui.unmount()
 })
@@ -263,7 +263,7 @@ test('asleep, it stops blitting; an event wakes it', async ($, on) => {
   await $.command.run({ command: 'critter', args: 'dance' } as any) // its legs move every frame
   const woke = blits.length
   await clock.advance(2000)
-  expect(blits.length - woke).toBeGreaterThan(10)
+  expect(blits.length - woke).toBeGreaterThan(4) // awake: more than 2 frames a second; asleep it was at most 1
   await ui.unmount()
 })
 

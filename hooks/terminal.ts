@@ -1,8 +1,8 @@
 // The critter in a terminal: the painted grid turned into half-block cells, and the walk.
 // Pure: no `$`, so all of it is tested directly.
 
-import { ART, PALETTE } from './critter-art'
-import type { Arm, Eyes, Pose, Prop } from './critter-art'
+import { ART, MINI, PALETTE, paint, paintMini } from './critter-art'
+import type { Arm, Art, Eyes, Pose, Prop } from './critter-art'
 
 /** The terminal's own colour, for a half with nothing painted on it. */
 export const DEFAULT_COLOR = 0x01000000
@@ -13,34 +13,34 @@ export const BODY_ROWS = 5
 /** How many columns the painted canvas spans. */
 export const SPRITE_COLS = ART.w
 
-/** The four sizes `/critter size` picks from: how many columns (and half-rows) each pixel takes. */
-export const SIZES = [1 / 3, 13 / 18, 10 / 9, 1.5] as const
-/** How wide, how tall, and how tall its body (the bottom 10 pixel rows) is at a scale. */
-export const spriteCols = (scale: number) => Math.ceil(ART.w * scale)
-export const stripRows = (scale: number) => Math.ceil((ART.h * scale) / 2)
-export const bodyRows = (scale: number) => Math.max(1, Math.ceil((BODY_PX * scale) / 2))
+/** How a size draws: which painting, at how many columns (and half-rows) per pixel. */
+export type Look = { art: Art; scale: number; paint: (pose: Pose) => Uint8Array }
+/** The four sizes `/critter size` picks from: the hand-drawn mini critter, then the full one at 0.72, 1.11 and 1.5. */
+export const SIZES: readonly Look[] = [
+  { art: MINI, scale: 1, paint: paintMini },
+  { art: ART, scale: 13 / 18, paint },
+  { art: ART, scale: 10 / 9, paint },
+  { art: ART, scale: 1.5, paint },
+]
+/** How wide, how tall, and how tall its body is, for a look. */
+export const spriteCols = (look: Look) => Math.ceil(look.art.w * look.scale)
+export const stripRows = (look: Look) => Math.ceil((look.art.h * look.scale) / 2)
+export const bodyRows = (look: Look) => Math.max(1, Math.ceil((look.art.bodyPx * look.scale) / 2))
 
-const BODY_PX = 10
 const SPACE = 0x20
 const UPPER_HALF = 0x2580
-// Quarter blocks by which quarters are filled: 1 top-left, 2 top-right, 4 bottom-left, 8 bottom-right.
-const QUARTERS = [0x20, 0x2598, 0x259d, 0x2580, 0x2596, 0x258c, 0x259e, 0x259b, 0x2597, 0x259a, 0x2590, 0x259c, 0x2584, 0x2599, 0x259f, 0x2588]
-// Below this scale a half block would lose the one-pixel eyes, so cells split into quarters instead.
-const QUARTER_BELOW = 0.7
-// Mirroring about the body's centre (grid x 6.5) keeps the body in its columns.
-const MIRROR = 2 * (0 - ART.col0) + 13
 
 /**
  * The colour a region of the painting reads as, at any scale. Detail wins: a prop's or an eye's
  * colour covering 30% of the region shows over the body; otherwise the body shows where it covers half.
  */
-function sample(px: Uint8Array, x0: number, x1: number, y0: number, y1: number): number {
+function sample(px: Uint8Array, art: Art, x0: number, x1: number, y0: number, y1: number): number {
   const area = (x1 - x0) * (y1 - y0)
   const weight = new Map<number, number>()
-  for (let y = Math.max(0, Math.floor(y0)); y < Math.min(ART.h, Math.ceil(y1)); y++) {
+  for (let y = Math.max(0, Math.floor(y0)); y < Math.min(art.h, Math.ceil(y1)); y++) {
     const h = Math.min(y1, y + 1) - Math.max(y0, y)
-    for (let x = Math.max(0, Math.floor(x0)); x < Math.min(ART.w, Math.ceil(x1)); x++) {
-      const v = px[y * ART.w + x]!
+    for (let x = Math.max(0, Math.floor(x0)); x < Math.min(art.w, Math.ceil(x1)); x++) {
+      const v = px[y * art.w + x]!
       if (v === 0) continue
       weight.set(v, (weight.get(v) ?? 0) + h * (Math.min(x1, x + 1) - Math.max(x0, x)))
     }
@@ -56,57 +56,29 @@ function sample(px: Uint8Array, x0: number, x1: number, y0: number, y1: number):
 
 const colorOf = (v: number) => (v === 0 ? DEFAULT_COLOR : PALETTE[v]!)
 
-/** Four quarters' colours as one cell: the two that matter most, the rest folded into them. */
-function quarterCell(q: number[]): [number, number, number] {
-  const count = new Map<number, number>()
-  for (const v of q) count.set(v, (count.get(v) ?? 0) + 1)
-  if (count.size === 1) return q[0] === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : [QUARTERS[15]!, colorOf(q[0]!), DEFAULT_COLOR]
-  // Details (anything but body and nothing) first, so a lone eye survives; then the commonest.
-  const rank = [...count.entries()].sort((a, b) => Number(b[0] > 1) - Number(a[0] > 1) || b[1] - a[1])
-  let fg = rank[0]![0]
-  let bg = rank[1]![0]
-  if (fg === 0) [fg, bg] = [bg, fg] // nothing is the background, never the ink
-  let bits = 0
-  q.forEach((v, i) => {
-    if (v === fg || (v !== bg && bg === 0)) bits |= 1 << i
-  })
-  return [QUARTERS[bits]!, colorOf(fg), colorOf(bg)]
-}
-
 /**
- * The bottom `rows` cell rows of the painted canvas, its left edge at lane column `x`, as Raster
- * cells: `[codepoint, fg, bg]` per cell. At `scale` each pixel takes that many columns and half-rows.
- * From 0.7 up a cell is ▀ with the top half as fg and the bottom half as bg; below, a quarter block.
+ * The bottom `rows` cell rows of a painting, its left edge at lane column `x`, as Raster cells:
+ * `[codepoint, fg, bg]` per cell, ▀ with the top half as fg and the bottom half as bg. At `scale`
+ * each pixel takes that many columns and half-rows. Mirrored about the body, so it keeps its columns.
  */
-export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1): Uint32Array {
+export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint32Array {
   const out = new Uint32Array(Math.max(0, laneCols) * Math.max(0, rows) * 3)
-  const quarters = scale < QUARTER_BELOW
-  // Pixel-space ranges for a slice of a cell: half-rows counted up from the strip's bottom edge.
+  const mirror = 2 * art.mid
+  // Pixel-space rows for one half of a cell row, counted up from the strip's bottom edge.
   const ys = (row: number, half: number): [number, number] => {
-    const fromBottom = (rows - row) * 2 - half // half-rows from the bottom to this half's bottom edge, plus one
-    return [ART.h - fromBottom / scale, ART.h - (fromBottom - 1) / scale]
-  }
-  const xs = (c: number, from: number, to: number): [number, number] => {
-    const a = (c + from) / scale
-    const b = (c + to) / scale
-    return flip ? [MIRROR - b, MIRROR - a] : [a, b]
+    const fromBottom = (rows - row) * 2 - half
+    return [art.h - fromBottom / scale, art.h - (fromBottom - 1) / scale]
   }
   for (let row = 0; row < rows; row++) {
     const top = ys(row, 0)
     const bottom = ys(row, 1)
     for (let col = 0; col < laneCols; col++) {
-      const c = col - x
-      const i = (row * laneCols + col) * 3
-      if (quarters) {
-        const l = xs(c, 0, 0.5)
-        const r = xs(c, 0.5, 1)
-        out.set(quarterCell([sample(px, ...l, ...top), sample(px, ...r, ...top), sample(px, ...l, ...bottom), sample(px, ...r, ...bottom)]), i)
-      } else {
-        const whole = xs(c, 0, 1)
-        const hi = sample(px, ...whole, ...top)
-        const lo = sample(px, ...whole, ...bottom)
-        out.set(hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)], i)
-      }
+      const a = (col - x) / scale
+      const b = (col - x + 1) / scale
+      const [x0, x1] = flip ? [mirror - b, mirror - a] : [a, b]
+      const hi = sample(px, art, x0, x1, ...top)
+      const lo = sample(px, art, x0, x1, ...bottom)
+      out.set(hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)], (row * laneCols + col) * 3)
     }
   }
   return out
@@ -120,7 +92,9 @@ export type WalkInput = {
   trick: Prop
   reminder: 'none' | 'water' | 'rest'
   zoom: boolean
-  /** Columns (and half-rows) per pixel; 1 when left out. */
+  /** How many columns the painting spans; the full critter at 1x when left out. */
+  sprite?: number
+  /** Columns per pixel, for the walking speed; 1 when left out. */
   scale?: number
 }
 
@@ -178,7 +152,7 @@ export class Walker {
   /** Catch up without moving: asleep or not by now, and inside a lane that may have shrunk. */
   settle(input: WalkInput) {
     const { now } = input
-    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - spriteCols(input.scale ?? 1)), this.x))
+    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - (input.sprite ?? SPRITE_COLS)), this.x))
     if (this.lastEvent === null || input.busy || input.reminder !== 'none' || (input.trick !== 'none' && input.trick !== 'nap')) this.poke(now)
     this.sleeping = now - this.lastEvent! >= (input.night ? NIGHT_SLEEP_MS : SLEEP_MS)
   }
@@ -186,7 +160,7 @@ export class Walker {
   step(input: WalkInput) {
     const { now, laneCols } = input
     const scale = input.scale ?? 1
-    const right = Math.max(0, laneCols - spriteCols(scale))
+    const right = Math.max(0, laneCols - (input.sprite ?? SPRITE_COLS))
     this.settle(input)
     if (this.sleeping || input.busy || now < this.petUntil) return
     const zoom = input.zoom || input.trick === 'zoomies'
