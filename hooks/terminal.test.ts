@@ -89,3 +89,12 @@ test('it walks when nothing is happening', () => {
   for (let i = 0; i < 200; i++) w.step({ ...IN, now: IN.now + i * 125 })
   expect(w.x).not.toBe(start)
 })
+
+test('settle catches up on sleep without moving', () => {
+  const w = new Walker(1)
+  w.x = 7
+  w.settle(IN)
+  w.settle({ ...IN, now: IN.now + 180_000 })
+  expect(w.sleeping).toBe(true)
+  expect(w.x).toBe(7)
+})

@@ -245,17 +245,21 @@ test('a Read shows reading in the caption', async ($, on) => {
   await ui.unmount()
 })
 
-test('asleep, it stops blitting', { timeout: 20_000 }, async ($, on) => {
-  // At night it nods off after 45 s, which keeps this test short; by day the same happens after 3 minutes.
+test('asleep, it stops blitting; an event wakes it', async ($, on) => {
+  // At night it nods off after 45 quiet seconds (3 minutes by day: the same code, unit-tested in terminal.test.ts).
+  // With no strip mounted nothing ticks, so the quiet minute costs nothing here.
   const clock = world(on, new Date(2026, 10, 23, 23, 0, 0).getTime())
   const blits = await startTerm($, clock, on)
-  const ui = await $.ui.mount(term())
-  await clock.advance(5000)
-  expect(blits.length).toBeGreaterThan(0) // awake, it animates
   await clock.advance(50_000)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Text', text: /asleep/ })).toBeDefined()
   const before = blits.length
   await clock.advance(10_000)
-  expect(blits.length - before).toBeLessThanOrEqual(10)
+  expect(blits.length - before).toBeLessThanOrEqual(10) // a z frame a second at most
+  await $.command.run({ command: 'critter', args: 'dance' } as any) // its legs move every frame
+  const woke = blits.length
+  await clock.advance(2000)
+  expect(blits.length - woke).toBeGreaterThan(10)
   await ui.unmount()
 })
 

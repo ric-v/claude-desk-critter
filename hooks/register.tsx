@@ -590,7 +590,8 @@ export const register: Register = on => {
     if (e.surface === 'terminal' && !(await read($, isAway))) {
       const cols = Math.max(1, Math.min(512, Number((e.props as any).bodyColumns) || 80))
       const room = Number((e.props as any).maxRows ?? STRIP_ROWS) - rowsOf(below) - (line === null ? 0 : 1)
-      const probe = await sceneNow($, 0)
+      const probe = await sceneNow($, cols)
+      walker.settle(probe.input) // asleep or not by now, before the caption says which
       const caption = captionOf(probe)
       const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
       if (room >= BODY_ROWS) {
@@ -598,7 +599,7 @@ export const register: Register = on => {
         const laneLeft = Math.min(cols, captionCols + CAPTION_GAP)
         const laneCols = Math.max(0, cols - laneLeft)
         const sc = { ...probe, input: { ...probe.input, laneCols } }
-        walker.step(sc.input) // keeps x inside a lane that may have just shrunk
+        walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
         strip = { requestId: e.requestId, laneLeft, laneCols, rows, caption }
         lastFrame = frameOf(sc, rows)
         top = (

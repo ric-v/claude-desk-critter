@@ -104,12 +104,18 @@ export class Walker {
     this.hopUntil = now + HOP_MS
   }
 
+  /** Catch up without moving: asleep or not by now, and inside a lane that may have shrunk. */
+  settle(input: WalkInput) {
+    const { now } = input
+    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - SPRITE_COLS), this.x))
+    if (this.lastEvent === null || input.busy || input.reminder !== 'none' || (input.trick !== 'none' && input.trick !== 'nap')) this.poke(now)
+    this.sleeping = now - this.lastEvent! >= (input.night ? NIGHT_SLEEP_MS : SLEEP_MS)
+  }
+
   step(input: WalkInput) {
     const { now, laneCols } = input
     const right = Math.max(0, laneCols - SPRITE_COLS)
-    this.x = Math.max(0, Math.min(right, this.x))
-    if (this.lastEvent === null || input.busy || input.reminder !== 'none' || (input.trick !== 'none' && input.trick !== 'nap')) this.poke(now)
-    this.sleeping = now - this.lastEvent! >= (input.night ? NIGHT_SLEEP_MS : SLEEP_MS)
+    this.settle(input)
     if (this.sleeping || input.busy || now < this.petUntil) return
     const zoom = input.zoom || input.trick === 'zoomies'
     if (input.trick !== 'none' && !zoom) return
