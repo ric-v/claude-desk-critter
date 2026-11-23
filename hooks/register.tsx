@@ -215,7 +215,7 @@ async function checkSky($: EngineInterface) {
 }
 
 async function arrive($: EngineInterface) {
-  await $.theme.set({ backdrop: { scene: SCENE, glass: GLASS } })
+  return $.theme.set({ backdrop: { scene: SCENE, glass: GLASS } })
 }
 
 async function toggleAway($: EngineInterface): Promise<boolean> {
@@ -496,6 +496,14 @@ function rowsOf(node: unknown): number {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // Put the critter on screen first: the backdrop doesn't wait for the rest of the session
+    // (every MCP server connecting, slow ones timing out) nor for the stats and reminders below.
+    // A theme set before the app attaches is held for it; one that went nowhere is set again at the end.
+    let isUp = false
+    if (!(await read($, isAway))) {
+      const early = await arrive($).catch(() => undefined)
+      isUp = early !== undefined && (early.isDrawn || early.requestId !== undefined)
+    }
     const done = await next(e)
     await $.command.register({
       name: 'critter',
@@ -526,7 +534,7 @@ export const register: Register = on => {
     skyTimer?.cancel()
     skyTimer = $.clock.every(SKY_MS, () => void checkSky($))
     await scheduleReminders($)
-    if (!(await read($, isAway))) await arrive($)
+    if (!isUp && !(await read($, isAway))) await arrive($)
     return done
   })
 

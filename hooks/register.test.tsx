@@ -384,3 +384,22 @@ test('a picture the terminal refuses turns into the text critter', async ($, on)
   expect(await ui.find({ type: 'Raster' })).toBeDefined()
   await ui.unmount()
 })
+
+test('the backdrop is set before the rest of the session finishes starting', async ($, on) => {
+  mock.clock(on, { now: NOV_23_NOON })
+  mock.store(on, {})
+  let themes = 0
+  let themesWhenStarted = -1
+  on('theme.set', () => {
+    themes += 1
+    return { value: { isDrawn: true, requestId: 'r1' } } as any
+  })
+  on('session.start', (_: any, e: any) => {
+    themesWhenStarted = themes // the engine's own start (MCP servers and all) runs here
+    return { cwd: e.cwd } as any
+  })
+  on('command.register', () => ({ value: undefined }) as any)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true } as any)
+  expect(themesWhenStarted).toBe(1)
+  expect(themes).toBe(1) // set once: no second set at the end
+})

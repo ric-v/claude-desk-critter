@@ -25,6 +25,7 @@ import {
   mix,
   mod,
   normalize,
+  pow,
   picture,
   pointers,
   scene,
@@ -325,14 +326,26 @@ function segment(g: vec2, a: vec2, b: vec2): number {
   return length(g - a - ab * t)
 }
 
-// The art is painted once a frame into a small texture on the critter's own grid, half a grid
-// pixel to a texel, then the full-window picture just looks the right texel up. That keeps the
-// per-pixel work tiny, so the critter stays sharp on any GPU.
-const TEX = 2 // texels per grid pixel
+// The art is painted once a frame into a small texture on the critter's own grid, a quarter of a
+// grid pixel to a texel (fine enough for smooth shading), then the full-window picture just looks
+// the right texel up. That keeps the per-pixel work tiny, so the critter stays sharp on any GPU.
+const TEX = 4 // texels per grid pixel
 const COL0 = -6 // the art's grid spans columns -6..24 and rows -16..19
 const ROW0 = -16
-const ART_W = 60
-const ART_H = 70
+const ART_W = 120
+const ART_H = 140
+
+// Light and depth, in screen directions (x right, y up), turned onto the critter's grid each frame
+// so the light stays put when it turns around or climbs a side.
+const LIGHT = vec3(-0.5, 0.65, 0.75) // from the top left, toward the viewer
+const DEPTH = vec2(0.85, -0.65) // the block's side face shows to the lower right
+const SHADOW = vec2(1.7, -1.5) // where its drop shadow falls, in grid pixels
+
+// Signed distance from g to a box with centre c and half-size h, in grid pixels.
+function boxDist(g: vec2, c: vec2, h: vec2): number {
+  const q = vec2(abs(g - c) - h)
+  return length(max(q, vec2(0, 0))) + min(max(q.x, q.y), 0)
+}
 
 // 1 while it is off the path: held, flying or walking the floor.
 function isFree(): number {
@@ -467,6 +480,18 @@ const art: Buffer = buffer({ size: [ART_W, ART_H], filter: 'nearest' }, p => {
 
   let color = vec4(0, 0, 0, 0) // straight colour; alpha says how much of it covers the ground
 
+  // Screen directions turned onto the grid: columns run along fwd, rows run down (against up).
+  const toGrid = (s: vec2) => vec2(dot(s, fwd), -dot(s, up))
+  const shadowAt = vec2(g - toGrid(SHADOW))
+  const sideAt = vec2(g - toGrid(DEPTH))
+
+  // A soft drop shadow of its whole shape on the wall behind it, and a contact shadow under its feet.
+  const shapeDist = min(boxDist(shadowAt, vec2(6.5, 3.5), vec2(5.5, 3.5)), boxDist(shadowAt, vec2(6.5, 8.5), vec2(4.5, 1.5)))
+  const drop = (1 - smoothstep(-0.8, 1.8, shapeDist)) * 0.2
+  const feetRoom = vec2((g.x - 6.5) / 6.2, (g.y - 10.1) / 0.9)
+  const contact = (1 - smoothstep(0.55, 1, length(feetRoom))) * 0.32 * onPath * (1 - air)
+  color = mix(color, vec4(0, 0, 0, 1), max(drop, contact))
+
   // An umbrella over it while it floats down: a striped canopy on a handle in its raised hand.
   const canopyAt = vec2(g - vec2(10, -3.5))
   const canopy = step(length(canopyAt), 7) * step(canopyAt.y, 0) * step(-6.2, canopyAt.y)
@@ -495,9 +520,39 @@ const art: Buffer = buffer({ size: [ART_W, ART_H], filter: 'nearest' }, p => {
   const spark = step(sparkR, 2.6) * step(0.35, sparkR) * step(spoke, 0.16 * (1 - sparkR / 2.6) + 0.06)
   color = mix(color, vec4(EMBER, 1), spark * pThink() * props * (1 - max(asking, max(happy, sad))))
 
-  // The critter itself.
-  color = mix(color, vec4(CLAY, 1), critter)
+  // The critter itself, as a block with depth.
+  // Its side face: the same shape pushed back, in shadow, showing past the front face's edge.
+  const sideBody = max(cells(sideAt, 1, 12, 0, 7), max(cells(sideAt, 0, 1, 3, 5), cells(sideAt, 12, 13, 3, 5)))
+  color = mix(color, vec4(CLAY * 0.52, 1), sideBody * (1 - critter))
+
+  // The back legs stand behind: darker, and nudged back along the depth.
+  const backAt = vec2(g - toGrid(DEPTH) * 0.6)
+  const backLegs = max(cells(backAt, 4, 5, 7, 7 + legB), cells(backAt, 10, 11, 7, 7 + legB))
+  color = mix(color, vec4(CLAY * 0.6, 1), backLegs * (1 - body))
+
+  // The front face is a rounded block: its edges bevel away, lit from the top left.
+  const BEVEL = 1.5
+  const nearLeft = 1 - smoothstep(0, BEVEL, g.x - 1)
+  const nearRight = 1 - smoothstep(0, BEVEL, 12 - g.x)
+  const nearTop = 1 - smoothstep(0, BEVEL, g.y)
+  const nearBottom = 1 - smoothstep(0, BEVEL, 7 - g.y)
+  const normal = vec3(normalize(vec3(nearRight - nearLeft, nearBottom - nearTop, 1.15)))
+  const lightOnGrid = vec3(normalize(vec3(dot(vec2(LIGHT.x, LIGHT.y), fwd), -dot(vec2(LIGHT.x, LIGHT.y), up), LIGHT.z)))
+  const diffuse = max(dot(normal, lightOnGrid), 0)
+  const halfway = vec3(normalize(lightOnGrid + vec3(0, 0, 1)))
+  const gloss = pow(max(dot(normal, halfway), 0), 28) * 0.32
+  const lit = vec3(CLAY * (0.48 + 0.66 * diffuse) + vec3(gloss, gloss, gloss))
+  // Front legs: lit like the body's lower edge, a touch darker toward the feet.
+  const frontLegs = max(cells(g, 2, 3, 7, 7 + legA), cells(g, 8, 9, 7, 7 + legA))
+  const legShade = vec3(CLAY * (0.78 - (g.y - 7) * 0.05))
+  color = mix(color, vec4(legShade, 1), frontLegs * (1 - body))
+  color = mix(color, vec4(lit, 1), body)
+
+  // Eyes: dark, with a glint toward the light while they're open and round.
   color = mix(color, vec4(INK, 1), eyeMask * body)
+  const roundEyes = (1 - step(0.5, max(happy, dance))) * (1 - nap) * (1 - dizzy)
+  const glint = max(cells(g, 3.1 + ex, 3.55 + ex, eyeTop + 0.15, eyeTop + 0.6), cells(g, 9.1 + ex, 9.55 + ex, eyeTop + 0.15, eyeTop + 0.6))
+  color = mix(color, vec4(PAPER, 1), glint * eyes * roundEyes * body * 0.9)
 
   // Dizzy: three little stars circling its head.
   for (const i of [0, 1, 2]) {
