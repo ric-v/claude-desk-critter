@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ART, C, PALETTE, paint } from './critter-art'
+import { ART, C, MINI, PALETTE, paint, paintMini } from './critter-art'
 import type { Pose } from './critter-art'
 import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
@@ -118,12 +118,15 @@ test('a bigger critter needs a wider lane', () => {
   expect(w.x).toBeLessThanOrEqual(100 - SPRITE_COLS * 2)
 })
 
-test('size 1 is the mini critter; size 4 one and a half times the full one', () => {
-  expect(spriteCols(SIZES[0]!)).toBe(21)
-  expect(stripRows(SIZES[0]!)).toBe(7)
-  expect(bodyRows(SIZES[0]!)).toBe(4)
-  expect(spriteCols(SIZES[3]!)).toBe(45)
-  expect(stripRows(SIZES[3]!)).toBe(15)
+test('every size is the same critter, at 1, 1.5, 2 and 2.5 times', () => {
+  expect(SIZES.map(look => look.scale)).toEqual([1, 1.5, 2, 2.5])
+  for (const look of SIZES) expect([look.art, look.paint]).toEqual([MINI, paintMini])
+  expect(SIZES.map(look => [spriteCols(look), stripRows(look), bodyRows(look)])).toEqual([
+    [21, 7, 4],
+    [32, 11, 6],
+    [42, 14, 8],
+    [53, 18, 10],
+  ])
 })
 
 test('the mini critter draws with its eyes in half blocks', () => {
@@ -198,9 +201,6 @@ test('a picture never passes the image size limit', () => {
   expect(pic.rgba.length).toBe(pic.width * pic.height * 4)
 })
 
-test('picture sizes take the same boxes as text sizes, all drawn in full detail', () => {
-  for (let i = 0; i < 4; i++) {
-    expect([spriteCols(PICTURE_SIZES[i]!), stripRows(PICTURE_SIZES[i]!), bodyRows(PICTURE_SIZES[i]!)]).toEqual([spriteCols(SIZES[i]!), stripRows(SIZES[i]!), bodyRows(SIZES[i]!)])
-    expect(PICTURE_SIZES[i]!.art).toBe(ART)
-  }
+test('a picture draws the same critter as the text', () => {
+  expect(PICTURE_SIZES).toBe(SIZES)
 })

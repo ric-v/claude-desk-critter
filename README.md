@@ -73,7 +73,7 @@ It reads tool names from the same events settings hooks get, so it never changes
 |---|---|
 | `/critter` | Opens its pane: level, stats, Play, wardrobe, reminders |
 | `/critter away` | Sends it off and gives the backdrop back; again to bring it back |
-| `/critter size 1`–`4` | Its size in a terminal: 1 is a hand-drawn mini critter, 2 to 4 the full one at 0.7, 1 and 1.5 times; the pane has the same buttons |
+| `/critter size 1`–`4` | Its size in a terminal: the same hand-drawn critter at 1, 1.5, 2 and 2.5 times; the pane has the same buttons |
 | `/critter dance` (`wave`, `jump`, `sparkler`, `nap`, `zoomies`) | A trick |
 | `/critter type` (`read`, `search`, `web`, `shell`, `think`, `ask`, `party`, `sad`, `water`, `coffee`) | Shows that prop for a few seconds |
 

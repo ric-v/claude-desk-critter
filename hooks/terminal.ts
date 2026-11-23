@@ -1,7 +1,7 @@
 // The critter in a terminal: the painted grid turned into half-block cells, and the walk.
 // Pure: no `$`, so all of it is tested directly.
 
-import { ART, MINI, PALETTE, paint, paintMini } from './critter-art'
+import { ART, MINI, PALETTE, paintMini } from './critter-art'
 import type { Arm, Art, Eyes, Pose, Prop } from './critter-art'
 
 /** The terminal's own colour, for a half with nothing painted on it. */
@@ -16,20 +16,12 @@ export const SPRITE_COLS = ART.w
 /** How a size draws: which painting, at how many columns (and half-rows) per pixel. */
 export type Look = { art: Art; scale: number; paint: (pose: Pose) => Uint8Array }
 /**
- * The four sizes `/critter size` picks from: the hand-drawn mini critter, then the full one at 0.72, 1
- * and 1.5. Scales between whole numbers smear one-pixel eyes, so size 3 is exactly 1, not 1.11.
+ * The four sizes `/critter size` picks from: one critter, the hand-drawn mini one, at 1, 1.5, 2 and
+ * 2.5 times, so every size has the same face, props and animations.
  */
-export const SIZES: readonly Look[] = [
-  { art: MINI, scale: 1, paint: paintMini },
-  { art: ART, scale: 13 / 18, paint },
-  { art: ART, scale: 1, paint },
-  { art: ART, scale: 1.5, paint },
-]
-/**
- * The same four boxes where the terminal shows real pictures: there the full critter fits every size
- * in full detail, so size 1 is the full critter at 0.7 rather than the mini one.
- */
-export const PICTURE_SIZES: readonly Look[] = [{ art: ART, scale: 0.7, paint }, ...SIZES.slice(1)]
+export const SIZES: readonly Look[] = [1, 1.5, 2, 2.5].map(scale => ({ art: MINI, scale, paint: paintMini }))
+/** Where the terminal shows real pictures: the same critter, drawn crisp at every scale. */
+export const PICTURE_SIZES: readonly Look[] = SIZES
 /** How wide, how tall, and how tall its body is, for a look. */
 export const spriteCols = (look: Look) => Math.ceil(look.art.w * look.scale)
 export const stripRows = (look: Look) => Math.ceil((look.art.h * look.scale) / 2)

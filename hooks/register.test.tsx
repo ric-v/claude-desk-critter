@@ -191,7 +191,7 @@ test('away hides the strip', async ($, on) => {
 test('short terminal trims, then captions, then hides', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)
-  await $.command.run({ command: 'critter', args: 'size 4' } as any) // 15 rows, its body 8
+  await $.command.run({ command: 'critter', args: 'size 4' } as any) // 18 rows, its body 10
   let ui = await $.ui.mount(term({ maxRows: 10 }))
   expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(10)
   await ui.unmount()
@@ -316,7 +316,7 @@ test('/critter size 2 makes a bigger critter', async ($, on) => {
   const said: any = await $.command.run({ command: 'critter', args: 'size 2' } as any)
   expect(said.text).toContain('2')
   const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(8)
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(11)
   await ui.unmount()
 })
 
@@ -325,9 +325,9 @@ test('a size that does not fit falls back to one that does', async ($, on) => {
   await startTerm($, clock, on)
   await $.command.run({ command: 'critter', args: 'size 4' } as any)
   const ui = await $.ui.mount(term({ bodyColumns: 64, maxRows: 30 }))
-  // size 4 needs 45 columns beside the caption and gets 43; size 3 needs 30 and gets 34
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(10)
-  expect(await ui.find({ type: 'Text', text: /size 3/ })).toBeDefined()
+  // sizes 4 and 3 need 53 and 42 columns beside the caption and get 34; size 2 needs 32
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(11)
+  expect(await ui.find({ type: 'Text', text: /size 2/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -345,7 +345,7 @@ test('the pane picks a size', async ($, on) => {
   await pane.press({ key: 'size-4' })
   await pane.unmount()
   const ui = await $.ui.mount(term({ bodyColumns: 200, maxRows: 40 }))
-  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(15)
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(18)
   await ui.unmount()
 })
 
