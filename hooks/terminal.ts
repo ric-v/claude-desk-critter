@@ -144,6 +144,8 @@ const HOP_MS = 400
 const REST_CHANCE = 1 / 40 // a tick's chance of stopping for a rest
 const BLINK_EVERY_MS = 4300
 const BLINK_MS = 150
+const CHANGE_MS = 400 // a change of prop: the old one goes in a puff, the new one arrives in one
+const STILL_MS = 500 // this long without a step and it is standing still: it breathes, it looks about
 
 /** mulberry32: a small seeded random, so tests walk the same way every time. */
 function random(seed: number) {
@@ -168,6 +170,10 @@ export class Walker {
   private lastEvent: number | null = null
   private petUntil = 0
   private hopUntil = 0
+  private movedAt = -Infinity
+  private lastProp: Prop = 'none'
+  private fromProp: Prop = 'none'
+  private propSince = -Infinity
   private readonly rand: () => number
 
   constructor(seed = Date.now()) {
@@ -222,7 +228,9 @@ export class Walker {
     this.progress += speed
     while (this.progress >= 1) {
       this.progress -= 1
+      const was = this.x
       this.x = Math.max(0, Math.min(right, this.x + this.facing))
+      if (this.x !== was) this.movedAt = now
       this.stride = this.stride ? 0 : 1
       if (input.reminder !== 'none' && this.x === Math.floor(right / 2)) break
     }
@@ -268,6 +276,13 @@ export class Walker {
           ? 'holding'
           : 'rest'
     const hop: 0 | 1 = now < this.hopUntil || (prop === 'jump' && Math.floor(now / 250) % 2 === 1) ? 1 : 0
-    return { stride: this.stride, dancing: prop === 'dance', eyes, arm, hop, prop, hat, t: now / 1000 }
+    if (prop !== this.lastProp) {
+      this.fromProp = this.lastProp
+      this.lastProp = prop
+      this.propSince = now
+    }
+    const enter = Math.max(0, Math.min(1, (now - this.propSince) / CHANGE_MS))
+    const still = now - this.movedAt >= STILL_MS
+    return { stride: this.stride, dancing: prop === 'dance', eyes, arm, hop, prop, hat, t: now / 1000, enter, from: this.fromProp, still }
   }
 }

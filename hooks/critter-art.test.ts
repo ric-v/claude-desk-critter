@@ -141,3 +141,37 @@ test('white mini props are edged so they show on a light terminal', () => {
   // the bottle's white shoulder at (13, 1) has nothing to its left, so that pixel is its edge
   expect(atMini(px, 13, 0)).toBe(C.STONE)
 })
+
+const frames = (pose: Partial<Pose>) => new Set(Array.from({ length: 48 }, (_, i) => paintMini({ ...IDLE, ...pose, t: i / 8 }).join())).size
+
+test('every work flow plays at least four different frames', () => {
+  for (const prop of ['type', 'read', 'search', 'web', 'shell', 'think', 'ask'] as const) expect([prop, frames({ prop }) >= 4]).toEqual([prop, true])
+})
+
+test('its eyes follow the work: across to the laptop, up to a thought', () => {
+  expect(atMini(paintMini(IDLE), 4, 3)).toBe(C.CLAY)
+  expect(atMini(paintMini({ ...IDLE, prop: 'type' }), 4, 3)).toBe(C.INK)
+  expect(atMini(paintMini(IDLE), 3, 1)).toBe(C.CLAY)
+  expect(atMini(paintMini({ ...IDLE, prop: 'think' }), 3, 1)).toBe(C.INK)
+})
+
+test('it smiles when happy and frowns when sad', () => {
+  const happy = paintMini({ ...IDLE, eyes: 'happy' })
+  expect([atMini(happy, 4, 4), atMini(happy, 5, 5)]).toEqual([C.INK, C.INK])
+  const sad = paintMini({ ...IDLE, prop: 'sad' })
+  expect([atMini(sad, 5, 4), atMini(sad, 4, 5)]).toEqual([C.INK, C.INK])
+})
+
+test('a new act arrives in a puff, then the prop', () => {
+  const puff = paintMini({ ...IDLE, prop: 'shell', enter: 0.2, from: 'none' })
+  const done = paintMini({ ...IDLE, prop: 'shell', enter: 1 })
+  expect(puff.join()).not.toBe(done.join())
+  expect(atMini(done, 15, 2)).toBe(C.NIGHT)
+  expect(atMini(puff, 15, 2)).not.toBe(C.NIGHT)
+  expect(countMini(puff, (gx, gy, v) => gx >= 13 && gy <= 5 && (v === C.PAPER || v === C.STONE))).toBeGreaterThan(0)
+})
+
+test('it breathes while it stands still, and only then', () => {
+  expect(frames({ still: true })).toBeGreaterThan(1)
+  expect(frames({ still: false })).toBe(1)
+})

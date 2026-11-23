@@ -122,10 +122,10 @@ test('every size is the same critter, at 1, 1.5, 2 and 2.5 times', () => {
   expect(SIZES.map(look => look.scale)).toEqual([1, 1.5, 2, 2.5])
   for (const look of SIZES) expect([look.art, look.paint]).toEqual([MINI, paintMini])
   expect(SIZES.map(look => [spriteCols(look), stripRows(look), bodyRows(look)])).toEqual([
-    [21, 7, 4],
-    [32, 11, 6],
-    [42, 14, 8],
-    [53, 18, 10],
+    [26, 7, 4],
+    [39, 11, 6],
+    [52, 14, 8],
+    [65, 18, 10],
   ])
 })
 
@@ -203,4 +203,30 @@ test('a picture never passes the image size limit', () => {
 
 test('a picture draws the same critter as the text', () => {
   expect(PICTURE_SIZES).toBe(SIZES)
+})
+
+test('facing left keeps a prop whole', () => {
+  const look = SIZES[0]!
+  const painted = (flip: boolean) => {
+    const cells = encode(look.paint({ ...IDLE, prop: 'type', arm: 'holding' }), 60, stripRows(look), 10, flip, 1, look.art)
+    let n = 0
+    for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) n++
+    return n
+  }
+  expect(painted(true)).toBe(painted(false))
+})
+
+test('a new act starts a short transition from the last one', () => {
+  const w = new Walker(1)
+  expect(w.pose(IN, 'none', 0, false, 0).enter).toBe(1)
+  const start = w.pose({ ...IN, now: IN.now + 1000 }, 'type', 0, false, 0)
+  expect([start.enter, start.from]).toEqual([0, 'none'])
+  expect(w.pose({ ...IN, now: IN.now + 1200 }, 'type', 0, false, 0).enter).toBe(0.5)
+  expect(w.pose({ ...IN, now: IN.now + 1600 }, 'type', 0, false, 0).enter).toBe(1)
+})
+
+test('it is still when it has not moved for a moment', () => {
+  const w = new Walker(1)
+  for (let i = 0; i < 10; i++) w.step({ ...IN, now: IN.now + i * 125, busy: true })
+  expect(w.pose({ ...IN, now: IN.now + 1250 }, 'none', 0, false, 0).still).toBe(true)
 })
