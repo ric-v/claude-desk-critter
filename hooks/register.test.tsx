@@ -141,3 +141,117 @@ test('/critter away sends it off and brings it back', async ($, on) => {
   const back: any = await $.command.run({ command: 'critter', args: 'away' } as any)
   expect(back.text).toContain('back')
 })
+
+// ---- The terminal: the critter in a strip above the prompt.
+const TERM = { ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 30, bodyColumns: 100 } } as const
+const term = (props: Record<string, unknown> = {}) => ({ ...TERM, props: { ...TERM.props, ...props } }) as any
+
+async function startTerm($: any, clock: any, on: any) {
+  const blits: any[] = []
+  on('ui.blit', async (_: any, e: any) => {
+    blits.push(e)
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as any)
+  await clock.advance(2000)
+  return blits
+}
+
+test('terminal shows the critter strip', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const raster: any = await ui.find({ type: 'Raster' })
+  expect(raster?.props.rows).toBe(10)
+  expect(await ui.find({ type: 'Text', text: /critter Lv 0/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desktop shows no strip', async ($, on) => {
+  const clock = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, maxRows: 30 } } as any)
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('away hides the strip', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  await $.command.run({ command: 'critter', args: 'away' } as any)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('short terminal trims, then captions, then hides', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  let ui = await $.ui.mount(term({ maxRows: 8 }))
+  expect(((await ui.find({ type: 'Raster' })) as any)?.props.rows).toBe(8)
+  await ui.unmount()
+  ui = await $.ui.mount(term({ maxRows: 3 }))
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /critter Lv/ })).toBeDefined()
+  await ui.unmount()
+  ui = await $.ui.mount(term({ maxRows: 0 }))
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /critter Lv/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('narrow terminal still fits', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  const ui = await $.ui.mount(term({ bodyColumns: 30 }))
+  const raster: any = await ui.find({ type: 'Raster' })
+  expect(raster?.props.columns).toBeGreaterThanOrEqual(0)
+  await ui.unmount()
+})
+
+test("another mod's line survives", async ($, on) => {
+  const clock = world(on)
+  on('ui.render', { component: 'AbovePrompt' }, async ($$: any, e: any) => {
+    const { Text } = $$.ui.resolve(e)
+    return <Text>Other mod</Text>
+  })
+  await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Text', text: 'Other mod' })).toBeDefined()
+  expect(await ui.find({ type: 'Raster' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('reminder line sits under the strip', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  await clock.advance(45 * 60 * 1000 + 1000)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Raster' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Your critter brought you some water/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a Read shows reading in the caption', async ($, on) => {
+  const clock = world(on)
+  await startTerm($, clock, on)
+  await $.tool.call({ tool: 'Read', file_path: 'C:/x.txt' } as any)
+  await clock.advance(400)
+  const ui = await $.ui.mount(term())
+  expect(await ui.find({ type: 'Text', text: /reading/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('asleep, it stops blitting', { timeout: 20_000 }, async ($, on) => {
+  // At night it nods off after 45 s, which keeps this test short; by day the same happens after 3 minutes.
+  const clock = world(on, new Date(2026, 10, 23, 23, 0, 0).getTime())
+  const blits = await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  await clock.advance(5000)
+  expect(blits.length).toBeGreaterThan(0) // awake, it animates
+  await clock.advance(50_000)
+  const before = blits.length
+  await clock.advance(10_000)
+  expect(blits.length - before).toBeLessThanOrEqual(10)
+  await ui.unmount()
+})

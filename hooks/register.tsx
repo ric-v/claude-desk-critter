@@ -2,6 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
+import { paint } from './critter-art'
+import type { Prop } from './critter-art'
+import { BODY_ROWS, STRIP_ROWS, Walker, encode } from './terminal'
+import type { WalkInput } from './terminal'
 
 // ---- State: the session's, mirrored to the store for what lasts across sessions.
 const isAway = atom({ plugin: 'desk-critter', key: 'isAway' } as const, false)
@@ -99,6 +103,7 @@ let skyTimer: Timer | undefined
 async function stage($: EngineInterface): Promise<void> {
   stageTimer?.cancel()
   stageTimer = undefined
+  await wake($)
   const wantProp = await propWanted($)
   const wantHat = hatFor((await read($, settings)).hat, await read($, sky))
   const now = await read($, shown)
@@ -123,6 +128,7 @@ async function setAct($: EngineInterface, next: CritterAct) {
 
 async function setFeel($: EngineInterface, value: number, ms = FEEL_MS) {
   feelTimer?.cancel()
+  await wake($)
   await update($, feel, () => value)
   feelTimer = $.clock.after(ms, () => void update($, feel, () => 0))
 }
@@ -273,6 +279,158 @@ function actFor(tool: string): CritterAct {
   return 'think'
 }
 
+// ---- The terminal: no backdrop there, so the critter walks a strip above the prompt, drawn in half blocks.
+const STRIP_KEY = 'desk-critter'
+const TICK_MS = 125
+const SLEEP_TICK_MS = 1000 // asleep, only its z's move
+const CAPTION_GAP = 2
+// The shader's prop numbers, as the painter's props.
+const PROP_OF: Record<number, Prop> = {
+  1: 'type',
+  2: 'read',
+  3: 'search',
+  4: 'web',
+  5: 'shell',
+  6: 'think',
+  7: 'dance',
+  8: 'wave',
+  9: 'jump',
+  10: 'sparkler',
+  11: 'nap',
+  12: 'zoomies',
+  13: 'water',
+  14: 'coffee',
+}
+const DOING: Record<CritterAct, string> = {
+  idle: 'idle',
+  think: 'thinking',
+  type: 'typing',
+  read: 'reading',
+  search: 'searching',
+  web: 'on the web',
+  shell: 'running a command',
+}
+
+// Session-only: where it is in its lane. Everything that lasts is in the atoms, shared with the desktop.
+const walker = new Walker()
+// The strip as last drawn; null while none is on screen, which also stops the tick.
+let strip: { requestId: string; laneCols: number; rows: number; caption: string } | null = null
+let tickTimer: Timer | undefined
+let tickEvery = 0
+let lastFrame = ''
+
+type Scene = { input: WalkInput; act: Prop; feel: number; asking: boolean; hat: number; level: number; idle: string }
+
+// The atoms as last read: reading them all on every tick costs more than painting, so a tick reuses
+// this for up to a second, and anything that wakes the critter (a change of act, feel, trick,
+// reminder, asking) drops it.
+let cached: { at: number; scene: Scene } | null = null
+const SCENE_FOR_MS = 1000
+
+async function sceneNow($: EngineInterface, laneCols: number): Promise<Scene> {
+  const now = await $.clock.now()
+  if (cached !== null && now - cached.at < SCENE_FOR_MS) {
+    return { ...cached.scene, input: { ...cached.scene.input, now, laneCols } }
+  }
+  const scene = await readScene($, now, laneCols)
+  cached = { at: now, scene }
+  return scene
+}
+
+async function readScene($: EngineInterface, now: number, laneCols: number): Promise<Scene> {
+  const a = await read($, act)
+  const s = await read($, sky)
+  const r = await read($, reminder)
+  const asking = await read($, isAsking)
+  const input: WalkInput = {
+    now,
+    laneCols,
+    busy: a !== 'idle',
+    night: isNight(s),
+    trick: PROP_OF[await read($, trick)] ?? 'none',
+    reminder: r,
+    zoom: false,
+  }
+  return {
+    input,
+    act: a === 'idle' ? 'none' : a,
+    feel: await read($, feel),
+    asking,
+    hat: hatFor((await read($, settings)).hat, s),
+    level: levelOf((await read($, stats)).xp),
+    idle: asking ? 'waiting on you' : DOING[a],
+  }
+}
+
+/** One line: its name, level, and what it is up to. */
+const captionOf = (sc: Scene) => `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}`
+
+/** The Raster's cells: the encoded frame's bytes, base64. */
+function frameOf(sc: Scene, rows: number): string {
+  const px = paint(walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat))
+  const cells = encode(px, sc.input.laneCols, rows, walker.x, walker.facing < 0)
+  return (new Uint8Array(cells.buffer) as unknown as { toBase64: () => string }).toBase64()
+}
+
+function stopTick() {
+  tickTimer?.cancel()
+  tickTimer = undefined
+  tickEvery = 0
+}
+
+/** Tick fast while it is awake, slowly while it sleeps, not at all with no strip. */
+function pace($: EngineInterface) {
+  if (strip === null) return stopTick()
+  const want = walker.sleeping ? SLEEP_TICK_MS : TICK_MS
+  if (tickTimer !== undefined && tickEvery === want) return
+  tickTimer?.cancel()
+  tickEvery = want
+  tickTimer = $.clock.every(want, () => void tick($))
+}
+
+async function tick($: EngineInterface) {
+  const now = strip
+  if (now === null) return stopTick()
+  const sc = await sceneNow($, now.laneCols)
+  walker.step(sc.input)
+  if (captionOf(sc) !== now.caption) {
+    // The caption is laid out with the lane, so a new one is a new render rather than a blit.
+    $.ui.invalidate('ui.render')
+  } else {
+    const cells = frameOf(sc, now.rows)
+    if (cells !== lastFrame) {
+      lastFrame = cells
+      await Promise.resolve($.ui.blit({ requestId: now.requestId, key: STRIP_KEY, columns: now.laneCols, rows: now.rows, cells } as any)).catch(() => {
+        strip = null // the strip is gone: stop until it is drawn again
+      })
+    }
+  }
+  pace($)
+}
+
+/** Something happened: wake it, and get the tick going if a strip is up. */
+async function wake($: EngineInterface) {
+  cached = null
+  walker.poke(await $.clock.now())
+  pace($)
+}
+
+/** About how many terminal rows a rendered tree takes. */
+function rowsOf(node: unknown): number {
+  if (node === null || node === undefined || node === false) return 0
+  if (Array.isArray(node)) return node.reduce((sum: number, n) => sum + rowsOf(n), 0)
+  if (typeof node === 'string' || typeof node === 'number') return String(node).split('\n').length
+  const el = node as { type?: unknown; props?: Record<string, any>; children?: unknown[] }
+  const p = el.props ?? {}
+  if (p.position === 'absolute') return 0
+  if (typeof p.height === 'number') return p.height
+  if (el.type === 'Raster' || el.type === 'Image') return typeof p.rows === 'number' ? p.rows : 0
+  const kids = el.children ?? (p.children === undefined ? [] : [p.children].flat())
+  if (el.type === 'Text') return Math.max(1, kids.map(k => (typeof k === 'string' ? k : '')).join('').split('\n').length)
+  const heights = kids.map(rowsOf)
+  return p.flexDirection === 'column' ? heights.reduce((a, b) => a + b, 0) : Math.max(0, ...heights)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const done = await next(e)
@@ -343,6 +501,7 @@ export const register: Register = on => {
   // A permission prompt is waiting on you: it waves you over.
   on('classic.PermissionRequest', async ($, e, next) => {
     await update($, isAsking, () => true)
+    await wake($)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -388,22 +547,72 @@ export const register: Register = on => {
     )
   })
 
-  // A reminder waits above the prompt until you press Done.
+  // Above the prompt: in a terminal, the critter's strip; everywhere, a reminder waiting for Done.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || e.props.isCollapsed) return next(e)
+    if (e.props.hasSurvey || e.props.isCollapsed) {
+      strip = null
+      return next(e)
+    }
+    const below = await next(e)
+    const { Box, Text, Button, Raster } = $.ui.resolve(e) as any
     const r = await read($, reminder)
-    if (r === 'none') return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e) as any
     const words = r === 'water' ? 'Your critter brought you some water. Take a sip?' : 'Your critter made coffee. Time for a short break?'
+    const line =
+      r === 'none' ? null : (
+        <Box flexDirection="row" gap={1}>
+          <Text>{words}</Text>
+          <Button key="done" variant="primary" onPress={() => void finishReminder($, false)}>
+            Done
+          </Button>
+          <Button key="later" onPress={() => void finishReminder($, true)}>
+            In 10 minutes
+          </Button>
+        </Box>
+      )
+
+    let top: unknown = null
+    strip = null
+    if (e.surface === 'terminal' && !(await read($, isAway))) {
+      const cols = Math.max(1, Math.min(512, Number((e.props as any).bodyColumns) || 80))
+      const room = Number((e.props as any).maxRows ?? STRIP_ROWS) - rowsOf(below) - (line === null ? 0 : 1)
+      const probe = await sceneNow($, 0)
+      const caption = captionOf(probe)
+      const captionCols = Math.min(caption.length, Math.max(0, cols - 1))
+      if (room >= BODY_ROWS) {
+        const rows = Math.min(STRIP_ROWS, room)
+        const laneLeft = Math.min(cols, captionCols + CAPTION_GAP)
+        const laneCols = Math.max(0, cols - laneLeft)
+        const sc = { ...probe, input: { ...probe.input, laneCols } }
+        walker.step(sc.input) // keeps x inside a lane that may have just shrunk
+        strip = { requestId: e.requestId, laneCols, rows, caption }
+        lastFrame = frameOf(sc, rows)
+        top = (
+          <Box width={cols} height={rows}>
+            <Box position="absolute" bottom={0} left={0} width={captionCols}>
+              <Text wrap="truncate" dimColor>
+                {caption}
+              </Text>
+            </Box>
+            <Box position="absolute" bottom={0} left={laneLeft}>
+              <Raster key={STRIP_KEY} columns={laneCols} rows={rows} cells={lastFrame} />
+            </Box>
+          </Box>
+        )
+      } else if (room >= 1) {
+        top = (
+          <Text wrap="truncate" dimColor>
+            {caption}
+          </Text>
+        )
+      }
+    }
+    pace($)
+    if (top === null && line === null) return below
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text>{words}</Text>
-        <Button key="done" variant="primary" onPress={() => void finishReminder($, false)}>
-          Done
-        </Button>
-        <Button key="later" onPress={() => void finishReminder($, true)}>
-          In 10 minutes
-        </Button>
+      <Box flexDirection="column">
+        {top}
+        {line}
+        {below}
       </Box>
     )
   })
