@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { C, PALETTE } from './critter-art'
+
 const BACKDROP = {
   plugin: 'desk-critter',
   component: 'Backdrop',
@@ -152,6 +154,7 @@ async function startTerm($: any, clock: any, on: any) {
     blits.push(e)
     return { value: {} }
   })
+  on('ui.message', async () => ({}) as any)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as any)
   await clock.advance(2000)
   return blits
@@ -253,5 +256,47 @@ test('asleep, it stops blitting', { timeout: 20_000 }, async ($, on) => {
   const before = blits.length
   await clock.advance(10_000)
   expect(blits.length - before).toBeLessThanOrEqual(10)
+  await ui.unmount()
+})
+
+// The Raster's cells, decoded: [codepoint, fg, bg] per cell.
+function cellsOf(base64: string): Uint32Array {
+  const bytes = Uint8Array.from(atob(base64), ch => ch.charCodeAt(0))
+  return new Uint32Array(bytes.buffer)
+}
+const hasColor = (cells: Uint32Array, color: number) => cells.some((v, i) => i % 3 !== 0 && v === color)
+
+// Where the critter's body is: the strip column of its first clay cell, and the lane's left edge.
+async function critterAt(ui: any) {
+  const raster: any = await ui.find({ type: 'Raster' })
+  const caption: any = await ui.find({ type: 'Text', text: /critter Lv/ })
+  const laneLeft = caption.text.length + 2
+  const cells = cellsOf(raster.props.cells)
+  const cols = raster.props.columns
+  let first = cols
+  for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3 + 1] === PALETTE[C.CLAY] || cells[i * 3 + 2] === PALETTE[C.CLAY]) first = Math.min(first, i % cols)
+  return { laneLeft, body: laneLeft + first, cols, rows: raster.props.rows }
+}
+
+test('a click on the critter pets it', async ($, on) => {
+  const clock = world(on)
+  const blits = await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const at = await critterAt(ui)
+  await ui.pointer({ type: 'down', x: at.body + 5, y: at.rows - 2, button: 'left' } as any)
+  await clock.advance(250)
+  expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(true)
+  await ui.unmount()
+})
+
+test('a click beside it does nothing', async ($, on) => {
+  const clock = world(on)
+  const blits = await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const at = await critterAt(ui)
+  const far = at.body > at.laneLeft + 40 ? at.laneLeft + 1 : 99
+  await ui.pointer({ type: 'down', x: far, y: at.rows - 2, button: 'left' } as any)
+  await clock.advance(250)
+  expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(false)
   await ui.unmount()
 })

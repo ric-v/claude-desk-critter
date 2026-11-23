@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { CritterAct, CritterReminder, CritterSettings, CritterShown, CritterSky, CritterStats } from '../types'
-import { paint } from './critter-art'
+import { ART, paint } from './critter-art'
 import type { Prop } from './critter-art'
 import { BODY_ROWS, STRIP_ROWS, Walker, encode } from './terminal'
 import type { WalkInput } from './terminal'
@@ -314,7 +314,7 @@ const DOING: Record<CritterAct, string> = {
 // Session-only: where it is in its lane. Everything that lasts is in the atoms, shared with the desktop.
 const walker = new Walker()
 // The strip as last drawn; null while none is on screen, which also stops the tick.
-let strip: { requestId: string; laneCols: number; rows: number; caption: string } | null = null
+let strip: { requestId: string; laneLeft: number; laneCols: number; rows: number; caption: string } | null = null
 let tickTimer: Timer | undefined
 let tickEvery = 0
 let lastFrame = ''
@@ -413,6 +413,21 @@ async function wake($: EngineInterface) {
   cached = null
   walker.poke(await $.clock.now())
   pace($)
+}
+
+// The body's columns in the painted canvas (grid x 0..12), the same either way it faces.
+const BODY_FROM = 0 - ART.col0
+const BODY_TO = 12 - ART.col0
+
+/** A click in the strip, by strip column: on the critter, it gets petted. */
+async function touched($: EngineInterface, x: number): Promise<boolean> {
+  if (strip === null) return false
+  const at = x - strip.laneLeft - walker.x
+  if (at < BODY_FROM - 1 || at > BODY_TO + 1) return false
+  cached = null
+  walker.pet(await $.clock.now())
+  pace($)
+  return true
 }
 
 /** About how many terminal rows a rendered tree takes. */
@@ -554,7 +569,7 @@ export const register: Register = on => {
       return next(e)
     }
     const below = await next(e)
-    const { Box, Text, Button, Raster } = $.ui.resolve(e) as any
+    const { Box, Text, Button, Raster, Client } = $.ui.resolve(e) as any
     const r = await read($, reminder)
     const words = r === 'water' ? 'Your critter brought you some water. Take a sip?' : 'Your critter made coffee. Time for a short break?'
     const line =
@@ -584,7 +599,7 @@ export const register: Register = on => {
         const laneCols = Math.max(0, cols - laneLeft)
         const sc = { ...probe, input: { ...probe.input, laneCols } }
         walker.step(sc.input) // keeps x inside a lane that may have just shrunk
-        strip = { requestId: e.requestId, laneCols, rows, caption }
+        strip = { requestId: e.requestId, laneLeft, laneCols, rows, caption }
         lastFrame = frameOf(sc, rows)
         top = (
           <Box width={cols} height={rows}>
@@ -595,6 +610,9 @@ export const register: Register = on => {
             </Box>
             <Box position="absolute" bottom={0} left={laneLeft}>
               <Raster key={STRIP_KEY} columns={laneCols} rows={rows} cells={lastFrame} />
+            </Box>
+            <Box position="absolute" top={0} left={0}>
+              <Client key="touch" module="./touch.tsx" width={cols} height={rows} />
             </Box>
           </Box>
         )
@@ -615,6 +633,14 @@ export const register: Register = on => {
         {below}
       </Box>
     )
+  })
+
+  // A click on the strip, from touch.tsx.
+  on('ui.message', async ($, e, next) => {
+    if ((e as any).element !== 'touch') return next(e)
+    const x = Number(((e as any).data as { x?: unknown } | null)?.x)
+    if (Number.isFinite(x)) await touched($, x)
+    return {} as any
   })
 
   // The critter's pane: its level, Play, the wardrobe, reminders.
