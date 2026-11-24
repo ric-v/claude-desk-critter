@@ -156,6 +156,8 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
   const dizzy = first ? 0 : s1.w
   const vel = first ? vec2(0, 0) : vec2(s2.x, s2.y)
   const umbrella = first ? 0 : s2.z
+  // Seconds a fresh press has rested on it while it is on the path, before it counts as a pick-up.
+  const pending = first ? 0 : s2.w
   const onPath = step(mode, 0.5)
 
   // Where it is now.
@@ -175,7 +177,8 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
     const here = step(ptr.gone, 0)
     const pressed = ptr.down * here
     const dist = length(ptr.at - centre)
-    grab = max(grab, pressed * step(ptr.age, 0.25) * step(dist, GRAB))
+    // Only a press on the bare backdrop: a click on the prompt box or a button never picks it up.
+    grab = max(grab, pressed * (1 - ptr.over) * step(ptr.age, 0.25) * step(dist, GRAB))
     const hd = dist + (1 - pressed) * 100000
     carrier = hd < carrierDist ? vec2(ptr.at.x, ptr.at.y) : carrier
     carrierVel = hd < carrierDist ? vec2((ptr.at - ptr.was) / max(dt, 0.001)) : carrierVel
@@ -197,7 +200,7 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
   const zoom = step(0.5, is(12))
   const rests = mix(step(fract(time / 11), 0.64), 1, zoom)
   const pace = SPEED * mix(1, 3, zoom) * (1 - v.sleepy * 0.5)
-  const strolling = rests * (1 - hover) * (1 - step(0.5, standing()))
+  const strolling = rests * (1 - hover) * (1 - step(0.5, standing())) * (1 - step(0.0001, pending))
   const strollMove = dt * pace * strolling * dir
   const calm = step(dizzy, 0)
   const pathMove = mix(strollMove, deskMove, work) * calm
@@ -248,7 +251,14 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
   const m1 = mode > 0.5 && mode < 1.5 ? 1 : 0
   const m2 = mode > 1.5 && mode < 2.5 ? 1 : 0
   const m3 = mode > 2.5 ? 1 : 0
-  const picked = grab * (1 - m1)
+  // On the path, a press waits: held a moment or dragged off it, it picks the critter up; let go
+  // sooner and it was a tap, which pets it where it stands. In the air or on the floor it's caught at once.
+  const waiting = m0 * step(0.0001, pending)
+  const starts = m0 * grab * (1 - waiting)
+  const lifts = waiting * stillHeld * max(step(0.22, pending), step(GRAB * 0.8, carrierDist))
+  const tapped = waiting * (1 - stillHeld)
+  const nextPending = starts > 0.5 ? max(dt, 0.001) : waiting > 0.5 && stillHeld > 0.5 && lifts < 0.5 ? pending + dt : 0
+  const picked = max(grab * max(m2, m3), lifts)
   const dropped = m1 * (1 - stillHeld)
   const landedTop = m2 * lands * hitsBox
   const landedFloor = m2 * lands * hitsFloor
@@ -289,12 +299,12 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
 
   const moved = abs(pathMove) * m0 + abs(floorStep) * m3
   const nextWalked = mod(walked + moved, 1000)
-  const nextRub = clamp(rub * exp(-dt * 0.9) + stroke * dt * 2.2, 0, 1.5)
+  const nextRub = clamp(rub * exp(-dt * 0.9) + stroke * dt * 2.2 + tapped * 0.8, 0, 1.5)
   const nextDizzy = max(knock * m2 * 2.5, max(dizzy - dt, 0))
 
   const t0 = vec4(nextD, nextRub, nextWalked, nextDir)
   const t1 = vec4(nextMode, nextPos.x, nextPos.y, nextDizzy)
-  const t2 = vec4(nextVel.x, nextVel.y, nextUmbrella, 0)
+  const t2 = vec4(nextVel.x, nextVel.y, nextUmbrella, nextPending)
   return p.cell.x < 0.5 ? t0 : p.cell.x < 1.5 ? t1 : t2
 })
 
