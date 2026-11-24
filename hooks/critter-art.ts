@@ -100,6 +100,14 @@ export type Pose = {
   from?: Prop
   /** Standing still for a moment: it breathes and looks about. */
   still?: boolean
+  /** Pixels off the ground, picked up or thrown; its shadow shrinks under it. 0 when left out. */
+  air?: number
+  /** Held by the pointer: arms up, legs kicking, looking down. */
+  held?: boolean
+  /** After a hard landing: eyes shut tight and stars round its head. */
+  dizzy?: boolean
+  /** Where its eyes look when nothing else holds them, in its own (unmirrored) directions: [-1..1, -1..1]. */
+  look?: readonly [number, number]
 }
 
 type Mask = (x: number, y: number) => boolean
@@ -394,7 +402,7 @@ export function paint(pose: Pose): Uint8Array {
  */
 export function miniLift(p: Pose): number {
   const bob = p.prop === 'dance' ? Math.floor(p.t * 3) % 2 : 0
-  return p.hop + bob
+  return p.hop + bob + Math.max(0, p.air ?? 0)
 }
 
 /**
@@ -409,7 +417,7 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
   const enter = p.enter ?? 1
   // Halfway into a change the puff clears and the new prop is there.
   const prop: Prop = enter < 0.5 && PUFF_AT[p.prop] !== undefined ? 'none' : p.prop
-  const lift = layer === 'all' ? miniLift(p) : 0
+  const lift = layer === 'all' ? Math.round(miniLift(p)) : 0
   // Whether what is drawn now stands on the ground (and stays there when it hops) or is the critter's.
   let grounded = false
   const set = (gx: number, gy: number, color: number) => {
@@ -442,14 +450,20 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
   if (['type', 'shell', 'search', 'web', 'water', 'coffee', 'sparkler'].includes(prop)) lookX = 1
   else if (prop === 'think') [lookX, lookY] = [1, -1]
   else if (prop === 'none' && p.still) lookX = p.t % 7 >= 6.3 ? 1 : p.t % 7 >= 5.6 ? -1 : 0
+  // Something to look at (the pointer), when no work holds its eyes; held, it looks down at the drop.
+  if (p.look !== undefined && (prop === 'none' || prop === 'hearts')) [lookX, lookY] = [Math.sign(p.look[0]), Math.sign(p.look[1])]
+  if (p.held) [lookX, lookY] = [0, 1]
 
-  // Under its feet: its shadow, or a dance floor lighting up.
+  // Under its feet: its shadow, smaller the higher it is, or a dance floor lighting up.
   if (prop === 'dance') {
     grounded = true
     const tiles = [C.ROSE, C.GOLD, C.BLUE, C.LEAF]
     for (let x = -2; x <= 13; x++) dot(x, 7, tiles[(Math.floor((x + 2) / 2) + frame(4, 4)) % 4]!)
     grounded = false
-  } else shadow(0, 11)
+  } else {
+    const s = Math.min(4, Math.round(Math.max(0, p.air ?? 0) / 2))
+    shadow(s, 11 - s)
+  }
 
   // Behind it: the rain cloud.
   if (prop === 'sad') {
@@ -459,10 +473,11 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
   }
 
   // Four thin legs: all down standing still; walking or dancing, one pair lifts, then the other.
-  const step = p.dancing ? frame(2, 3) : p.stride
+  // Held, they kick in the air.
+  const step = p.held ? frame(2, 6) : p.dancing ? frame(2, 3) : p.stride
   for (const x of [2, 4, 7, 9]) {
     dot(x, 6, C.CLAY)
-    const lifted = (p.dancing || !p.still) && (step === 0 ? x === 4 || x === 9 : x === 2 || x === 7)
+    const lifted = (p.held || p.dancing || !p.still) && (step === 0 ? x === 4 || x === 9 : x === 2 || x === 7)
     if (!lifted) dot(x, 7, C.CLAY)
   }
 
@@ -481,7 +496,7 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
       dot(x0 - 1, 1, C.INK)
       dot(x0, 0, C.INK)
       dot(x0 + 1, 1, C.INK)
-    } else if (eyes === 'shut') row(Math.min(x0, x0 + side), Math.max(x0, x0 + side), 2, C.INK)
+    } else if (eyes === 'shut' || eyes === 'crossed') row(Math.min(x0, x0 + side), Math.max(x0, x0 + side), 2, C.INK)
     else if (eyes === 'lidded') dot(x, y + 1, C.INK)
     else if (eyes !== 'blink') dot(x, y, C.INK)
   }
@@ -489,17 +504,26 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
   // Arms, 2 x 2 on each side. Dancing they swing up in turn; otherwise the far one waves, holds or works.
   const arm = (x: number, up: boolean) => sprite(x, up ? 0 : 2, ['cc', 'cc'], { c: C.CLAY })
   const swing = prop === 'dance' ? frame(2, 3) : -1
-  arm(0, swing === 0)
   const works = ['type', 'shell', 'search', 'read', 'web'].includes(prop)
-  if (prop === 'dance') arm(10, swing === 1)
-  else if (!works) {
+  if (p.held) {
+    // Picked up: both arms flung up, \o/
+    sprite(0, -1, ['c.', 'cc', '.c'], { c: C.CLAY })
+    sprite(10, -1, ['.c', 'cc', 'c.'], { c: C.CLAY })
+  } else if (prop === 'dance') {
+    arm(0, swing === 0)
+    arm(10, swing === 1)
+  } else if (!works) {
+    arm(0, false)
     if (p.arm === 'raised' || p.arm === 'wave') {
       const out = p.arm === 'wave' && frame(2, 3) === 1
       sprite(10, 0, ['c', 'c'], { c: C.CLAY })
       sprite(out ? 11 : 10, -2, ['c', 'c'], { c: C.CLAY })
     } else if (p.arm === 'holding') sprite(10, 2, ['ccc', 'ccc'], { c: C.CLAY })
     else arm(10, false)
-  } else arm(10, false)
+  } else {
+    arm(0, false)
+    arm(10, false)
+  }
 
   switch (prop) {
     case 'type': {
@@ -807,6 +831,14 @@ export function paintMini(p: Pose, layer: 'all' | 'ground' | 'body' = 'all'): Ui
       heart(2, -3 - f)
       heart(7, -5 + f)
       break
+    }
+  }
+
+  // Dizzy: three gold stars circling its head.
+  if (p.dizzy) {
+    for (let i = 0; i < 3; i++) {
+      const a = p.t * 5 + (i * 2 * Math.PI) / 3
+      dot(Math.round(5.5 + Math.cos(a) * 5), Math.round(-1.5 + Math.sin(a) * 1.2), C.GOLD)
     }
   }
 

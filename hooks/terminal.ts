@@ -3,6 +3,7 @@
 
 import { ART, MINI, PALETTE, miniLift, paintMini } from './critter-art'
 import type { Arm, Art, Eyes, Pose, Prop } from './critter-art'
+import { light } from './light'
 
 /** The terminal's own colour, for a half with nothing painted on it. */
 export const DEFAULT_COLOR = 0x01000000
@@ -88,23 +89,26 @@ export function grid(px: Uint8Array, laneCols: number, rows: number, x: number, 
 }
 
 /**
- * Half-row palette indexes as Raster cells: `[codepoint, fg, bg]` per cell, ▀ with the top half as fg
- * and the bottom half as bg, ▄ when only the bottom is painted.
+ * Half-row colours as Raster cells: `[codepoint, fg, bg]` per cell, ▀ with the top half as fg and the
+ * bottom half as bg, ▄ when only the bottom is painted. DEFAULT_COLOR is a half with nothing on it.
  */
-export function cellsOf(g: Uint8Array, laneCols: number, rows: number): Uint32Array {
+export function cellsFrom(colors: Uint32Array, laneCols: number, rows: number): Uint32Array {
   const out = new Uint32Array(Math.max(0, laneCols) * Math.max(0, rows) * 3)
   for (let row = 0; row < rows; row++)
     for (let col = 0; col < laneCols; col++) {
-      const hi = g[row * 2 * laneCols + col]!
-      const lo = g[(row * 2 + 1) * laneCols + col]!
+      const hi = colors[row * 2 * laneCols + col]!
+      const lo = colors[(row * 2 + 1) * laneCols + col]!
       // The glyph's ink is always a painted colour: an empty top half is the terminal's background
       // under ▄, never its text colour on top of ▀ (which most terminals draw white).
       const cell: [number, number, number] =
-        hi === 0 && lo === 0 ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : hi === 0 ? [LOWER_HALF, colorOf(lo), DEFAULT_COLOR] : [UPPER_HALF, colorOf(hi), colorOf(lo)]
+        hi === DEFAULT_COLOR && lo === DEFAULT_COLOR ? [SPACE, DEFAULT_COLOR, DEFAULT_COLOR] : hi === DEFAULT_COLOR ? [LOWER_HALF, lo, DEFAULT_COLOR] : [UPPER_HALF, hi, lo]
       out.set(cell, (row * laneCols + col) * 3)
     }
   return out
 }
+
+/** Half-row palette indexes as Raster cells, flat: each index its palette colour. */
+export const cellsOf = (g: Uint8Array, laneCols: number, rows: number): Uint32Array => cellsFrom(Uint32Array.from(g, colorOf), laneCols, rows)
 
 /** A painting as Raster cells: `grid`, then `cellsOf`. */
 export function encode(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): Uint32Array {
@@ -133,39 +137,67 @@ export function renderGrid(look: Look, pose: Pose, laneCols: number, rows: numbe
   return ground
 }
 
-/** A pose drawn for the terminal, as Raster cells. */
-export const render = (look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): Uint32Array =>
-  cellsOf(renderGrid(look, pose, laneCols, rows, x, flip), laneCols, rows)
+/** The side face shows from size 2 up; smaller, a pixel of it would cover too much. */
+const depthAt = (per: number) => (per >= 2 ? 0.5 : 0)
+const glints = (pose: Pose) => pose.eyes === 'open' || pose.eyes === 'lidded'
 
-/** Image pixels to a painted pixel; fewer when the lane is so wide the picture would pass 2048 across. */
-const PICTURE_PX = 3
+/** A pose drawn for the terminal, as Raster cells, lit: bevelled, with a side face from size 2. */
+export function render(look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): Uint32Array {
+  const g = renderGrid(look, pose, laneCols, rows, x, flip)
+  const lit = light(g, laneCols, rows * 2, look.scale, { depth: depthAt(look.scale) })
+  const colors = new Uint32Array(lit.rgb.length)
+  for (let i = 0; i < colors.length; i++) colors[i] = lit.alpha[i] === 0 ? DEFAULT_COLOR : lit.rgb[i]!
+  return cellsFrom(colors, laneCols, rows)
+}
+
+/** Image pixels to a painted pixel at most; fewer when the lane is wide, so a frame stays small. */
+const PICTURE_PX = 4
 const PICTURE_MAX = 2048
+const PICTURE_BUDGET = 48_000
 
 /**
- * The same frame as `encode`, as RGBA for an Image over the whole lane: each painted pixel a
- * square block, clear where nothing is painted. The terminal stretches it over `laneCols` x `rows`.
+ * A pose as RGBA for an Image over the whole lane, lit: a smooth bevel, a gloss, glinting eyes, a
+ * side face and a soft shadow, clear where nothing is painted. Each painted pixel is a block of
+ * image pixels, so the critter moves, hops and falls by a fraction of a pixel. The terminal
+ * stretches it over `laneCols` x `rows`.
  */
-export function picture(px: Uint8Array, laneCols: number, rows: number, x: number, flip: boolean, scale = 1, art: Art = ART): { rgba: Uint8Array; width: number; height: number } {
+export function picture(look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): { rgba: Uint8Array; width: number; height: number } {
+  const { art, scale } = look
   const across = Math.max(1, Math.round(laneCols / scale))
   const down = Math.max(1, Math.round((rows * 2) / scale))
-  const k = Math.max(1, Math.min(PICTURE_PX, Math.floor(PICTURE_MAX / across)))
+  const k = Math.max(1, Math.min(PICTURE_PX, Math.floor(PICTURE_MAX / across), Math.floor(Math.sqrt(PICTURE_BUDGET / (across * down)))))
   const width = across * k
   const height = down * k
-  const rgba = new Uint8Array(width * height * 4)
-  const left = Math.round(x / scale)
-  const mirror = Math.round(2 * art.mid) - 1
-  for (let ay = 0; ay < down; ay++) {
-    const sy = art.h - down + ay
-    if (sy < 0 || sy >= art.h) continue
-    for (let ax = 0; ax < across; ax++) {
-      const sx = flip ? mirror - (ax - left) : ax - left
-      if (sx < 0 || sx >= art.w) continue
-      const v = px[sy * art.w + sx]!
-      if (v === 0) continue
-      const c = PALETTE[v]!
-      for (let dy = 0; dy < k; dy++)
-        for (let dx = 0; dx < k; dx++) rgba.set([(c >> 16) & 255, (c >> 8) & 255, c & 255, 255], ((ay * k + dy) * width + ax * k + dx) * 4)
+  const left = Math.round((x / scale) * k)
+  const g = new Uint8Array(width * height)
+  const lay = (px: Uint8Array, up: number) => {
+    for (let v = 0; v < height; v++) {
+      const sy = art.h - down + Math.floor((v + up) / k)
+      if (sy < 0 || sy >= art.h) continue
+      for (let u = 0; u < width; u++) {
+        const rel = (u - left + 0.5) / k
+        const sx = Math.floor(flip ? 2 * art.mid - rel : rel)
+        if (sx < 0 || sx >= art.w) continue
+        const p = px[sy * art.w + sx]!
+        if (p !== 0) g[v * width + u] = p
+      }
     }
+  }
+  if (look.lift === undefined) lay(look.paint(pose), 0)
+  else {
+    lay(look.paint(pose, 'ground'), 0)
+    lay(look.paint(pose, 'body'), Math.round(look.lift(pose) * k))
+  }
+  const lit = light(g, width, height, k, { glint: glints(pose), depth: 0.5, soft: true })
+  const rgba = new Uint8Array(width * height * 4)
+  for (let i = 0; i < width * height; i++) {
+    const a = lit.alpha[i]!
+    if (a === 0) continue
+    const c = lit.rgb[i]!
+    rgba[i * 4] = (c >> 16) & 255
+    rgba[i * 4 + 1] = (c >> 8) & 255
+    rgba[i * 4 + 2] = c & 255
+    rgba[i * 4 + 3] = a
   }
   return { rgba, width, height }
 }
@@ -184,6 +216,10 @@ export type WalkInput = {
   scale?: number
   /** How far its props reach past its left edge when it faces left, in columns; 0 when left out. */
   reach?: number
+  /** Columns from its left edge to the middle of its body, the same either way it faces; 0 when left out. */
+  center?: number
+  /** How many pixels it can be lifted and still show whole in the strip; 0 when left out. */
+  headroom?: number
 }
 
 const WALK = 0.5 // columns a tick
@@ -196,6 +232,22 @@ const BLINK_EVERY_MS = 4300
 const BLINK_MS = 150
 const CHANGE_MS = 400 // a change of prop: the old one goes in a puff, the new one arrives in one
 const STILL_MS = 500 // this long without a step and it is standing still: it breathes, it looks about
+// Picked up and thrown. Heights are in painted pixels, across in columns, time in seconds.
+const GRAVITY = 90 // pixels a second, every second
+const BOUNCE_FROM = 12 // a landing faster than this bounces
+const BOUNCE = 0.38 // how much of its speed a bounce keeps
+const HARD_LANDING = 40 // a landing faster than this leaves it dizzy
+const DIZZY_MS = 1600
+const WALL = 0.55 // how much of its speed it keeps off the lane's ends
+const SLIDE = 7 // how fast a slide along the ground stops
+const MAX_THROW_X = 140
+const MAX_THROW_UP = 55
+const DRAG_FROM = 1 // columns, or pixels up, the pointer moves before a press becomes a pick-up
+const THROW_WINDOW_MS = 120 // how far back the throw's speed is measured
+// The pointer near it.
+const HOVER_MS = 2500 // with no word from the pointer this long, it stops looking
+const RUB_MS = 1200 // three turns of the pointer over it within this are a pet
+const LOOK_FROM = 2 // pixels off its middle before it looks to one side
 
 /** mulberry32: a small seeded random, so tests walk the same way every time. */
 function random(seed: number) {
@@ -225,6 +277,20 @@ export class Walker {
   private fromProp: Prop = 'none'
   private propSince = -Infinity
   private readonly rand: () => number
+  // Off the ground: 'held' by the pointer, or 'flying' after a throw or a drop.
+  mode: 'ground' | 'held' | 'flying' = 'ground'
+  /** Painted pixels off the ground. */
+  air = 0
+  private vx = 0
+  private vy = 0
+  private lastStep: number | null = null
+  private dizzyUntil = 0
+  private right = 0
+  private headroom = 0
+  private pressed: { col: number; up: number; dx: number; dAir: number } | null = null
+  private trail: { t: number; x: number; air: number }[] = []
+  private hovered: { col: number; up: number; at: number } | null = null
+  private rub: { dir: number; at: number[] } = { dir: 0, at: [] }
 
   constructor(seed = Date.now()) {
     this.rand = random(seed)
@@ -243,10 +309,124 @@ export class Walker {
     this.hopUntil = now + HOP_MS
   }
 
+  /** Pressed: on its body, a pet, and the start of a pick-up should the pointer move. False when it missed. */
+  press(now: number, col: number, up: number, onBody: boolean): boolean {
+    if (!onBody) return false
+    this.pet(now)
+    this.pressed = { col, up, dx: this.x - col, dAir: this.air - up }
+    return true
+  }
+
+  /** The pointer moved with the button down: past a little way, it is picked up and follows. */
+  drag(now: number, col: number, up: number) {
+    const p = this.pressed
+    if (p === null) return
+    if (this.mode !== 'held') {
+      if (Math.abs(col - p.col) < DRAG_FROM && Math.abs(up - p.up) < DRAG_FROM) return
+      this.mode = 'held'
+      this.petUntil = 0
+      this.hopUntil = 0
+      this.trail = []
+      p.dAir += 1 // a little up off its feet as it is lifted
+    }
+    this.poke(now)
+    const was = this.x
+    this.x = Math.max(0, Math.min(this.right, col + p.dx))
+    this.air = Math.max(0, Math.min(this.headroom + 4, up + p.dAir))
+    if (Math.abs(this.x - was) > 0.3) this.facing = this.x > was ? 1 : -1
+    this.trail.push({ t: now, x: this.x, air: this.air })
+    while (this.trail.length > 2 && now - this.trail[0]!.t > THROW_WINDOW_MS) this.trail.shift()
+  }
+
+  /** The button came up: a held critter is thrown with the pointer's last speed; a tap was only a pet. */
+  release(now: number) {
+    this.pressed = null
+    if (this.mode !== 'held') return
+    const first = this.trail[0]
+    const dt = first === undefined ? 0 : (now - first.t) / 1000
+    this.vx = dt > 0.01 ? Math.max(-MAX_THROW_X, Math.min(MAX_THROW_X, (this.x - first!.x) / dt)) : 0
+    this.vy = dt > 0.01 ? Math.max(-MAX_THROW_UP, Math.min(MAX_THROW_UP, (this.air - first!.air) / dt)) : 0
+    this.mode = 'flying'
+    this.lastStep = now
+    this.trail = []
+    this.poke(now)
+  }
+
+  /** Whether a press on it is still down. */
+  get isPressed() {
+    return this.pressed !== null
+  }
+
+  /** Whether it is moving on its own clock rather than walking: held, flying or sliding. */
+  get lively() {
+    return this.mode !== 'ground' || this.vx !== 0
+  }
+
+  /**
+   * The pointer moved over the strip with no button down: `col` the lane column, `up` pixels above the
+   * ground. Over its body it stops to look; rubbed back and forth, it is petted. True when that pets it.
+   */
+  hover(now: number, col: number, up: number, onBody: boolean): boolean {
+    const last = this.hovered
+    this.hovered = { col, up, at: now }
+    if (!onBody) {
+      this.rub = { dir: 0, at: [] }
+      return false
+    }
+    if (!this.sleeping) this.restUntil = Math.max(this.restUntil, now + 800)
+    if (last === null || col === last.col) return false
+    const dir = Math.sign(col - last.col)
+    if (this.rub.dir !== 0 && dir !== this.rub.dir) this.rub.at.push(now)
+    this.rub.dir = dir
+    this.rub.at = this.rub.at.filter(t => now - t < RUB_MS)
+    if (this.rub.at.length < 3) return false
+    this.rub = { dir: 0, at: [] }
+    this.pet(now)
+    return true
+  }
+
+  /** The pointer left the strip. */
+  unhover() {
+    this.hovered = null
+    this.rub = { dir: 0, at: [] }
+  }
+
+  /** Off the ground or sliding: gravity, bounces, the lane's ends, and dizzy after a hard landing. */
+  private fly(now: number) {
+    const dt = this.lastStep === null ? 0 : Math.min(0.1, Math.max(0, (now - this.lastStep) / 1000))
+    if (this.mode === 'flying') {
+      this.vy -= GRAVITY * dt
+      this.air += this.vy * dt
+      if (this.air <= 0) {
+        this.air = 0
+        const impact = -this.vy
+        if (impact > HARD_LANDING) this.dizzyUntil = now + DIZZY_MS
+        if (impact > BOUNCE_FROM) this.vy = impact * BOUNCE
+        else {
+          this.vy = 0
+          this.mode = 'ground'
+          this.restUntil = now + 700
+        }
+      }
+    } else this.vx *= Math.exp(-SLIDE * dt)
+    this.x += this.vx * dt
+    if (this.x <= 0 || this.x >= this.right) {
+      this.x = Math.max(0, Math.min(this.right, this.x))
+      this.vx = -this.vx * WALL
+    }
+    if (Math.abs(this.vx) > 3) this.facing = this.vx > 0 ? 1 : -1
+    if (this.mode === 'ground' && Math.abs(this.vx) < 2) {
+      this.vx = 0
+      this.x = Math.round(this.x)
+    }
+  }
+
   /** Catch up without moving: asleep or not by now, and inside a lane that may have shrunk. */
   settle(input: WalkInput) {
     const { now } = input
-    this.x = Math.max(0, Math.min(Math.max(0, input.laneCols - (input.sprite ?? SPRITE_COLS)), this.x))
+    this.right = Math.max(0, input.laneCols - (input.sprite ?? SPRITE_COLS))
+    this.headroom = Math.max(0, input.headroom ?? 0)
+    this.x = Math.max(0, Math.min(this.right, this.x))
     if (this.lastEvent === null || input.busy || input.reminder !== 'none' || (input.trick !== 'none' && input.trick !== 'nap')) this.poke(now)
     this.sleeping = now - this.lastEvent! >= (input.night ? NIGHT_SLEEP_MS : SLEEP_MS)
   }
@@ -256,6 +436,14 @@ export class Walker {
     const scale = input.scale ?? 1
     const right = Math.max(0, laneCols - (input.sprite ?? SPRITE_COLS))
     this.settle(input)
+    if (this.hovered !== null && now - this.hovered.at > HOVER_MS) this.unhover()
+    if (this.lively) {
+      this.fly(now)
+      this.lastStep = now
+      return
+    }
+    this.lastStep = now
+    if (now < this.dizzyUntil) return
     const zooming = input.zoom || input.trick === 'zoomies'
     if (input.busy || (input.trick !== 'none' && !zooming) || input.reminder !== 'none') {
       // At work, it faces the side with room for its props: right, unless it is far over and has the room on its left.
@@ -295,7 +483,11 @@ export class Walker {
   pose(input: WalkInput, act: Prop, feel: number, asking: boolean, hat: number): Pose {
     const { now } = input
     const petting = now < this.petUntil
-    const prop: Prop = petting
+    const held = this.mode === 'held'
+    const dizzy = now < this.dizzyUntil
+    const prop: Prop = held || dizzy
+      ? 'none'
+      : petting
       ? 'hearts'
       : asking
         ? 'ask'
@@ -314,8 +506,9 @@ export class Walker {
                     : this.sleeping
                       ? 'nap'
                       : 'none'
-    const eyes: Eyes =
-      this.sleeping || prop === 'nap'
+    const eyes: Eyes = dizzy
+      ? 'crossed'
+      : this.sleeping || prop === 'nap'
         ? 'shut'
         : prop === 'party' || prop === 'dance' || prop === 'hearts'
           ? 'happy'
@@ -337,7 +530,31 @@ export class Walker {
       this.propSince = now
     }
     const enter = Math.max(0, Math.min(1, (now - this.propSince) / CHANGE_MS))
-    const still = now - this.movedAt >= STILL_MS
-    return { stride: this.stride, dancing: prop === 'dance', eyes, arm, hop, prop, hat, t: now / 1000, enter, from: this.fromProp, still }
+    const still = now - this.movedAt >= STILL_MS && !this.lively
+    // Its eyes follow the pointer: to one side past a couple of pixels off its middle, up when above its head.
+    let look: [number, number] | undefined
+    if (this.hovered !== null && !this.sleeping) {
+      const scale = input.scale ?? 1
+      const off = (this.hovered.col - this.x - (input.center ?? 0)) / scale
+      const side = Math.abs(off) < LOOK_FROM ? 0 : Math.sign(off) * this.facing
+      look = [side, this.hovered.up - this.air > 9 ? -1 : 0]
+    }
+    return {
+      stride: this.stride,
+      dancing: prop === 'dance',
+      eyes,
+      arm,
+      hop: held || this.mode === 'flying' ? 0 : hop,
+      prop,
+      hat,
+      t: now / 1000,
+      enter,
+      from: this.fromProp,
+      still,
+      air: this.air,
+      held,
+      dizzy,
+      look,
+    }
   }
 }

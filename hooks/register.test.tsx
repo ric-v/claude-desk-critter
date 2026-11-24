@@ -310,6 +310,47 @@ test('a click beside it does nothing', async ($, on) => {
   await ui.unmount()
 })
 
+test('dragged by the pointer it is carried off; let go, it falls back to the ground', async ($, on) => {
+  const clock = world(on)
+  const blits = await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const at = await critterAt(ui)
+  const y = at.rows - 1
+  await (ui as any).pointer({ type: 'down', x: at.body + 1, y, button: 'left' } as any)
+  await clock.advance(60)
+  // Up and to the side: the critter's clay goes up off the bottom row and moves with the pointer.
+  for (let i = 1; i <= 6; i++) {
+    await (ui as any).pointer({ type: 'move', x: at.body + 1 + i * 2, y: Math.max(0, y - i), button: 'left' } as any)
+    await clock.advance(60)
+  }
+  const clayRows = (b: any) => {
+    const cells = cellsOf(b.cells)
+    const rows = new Set<number>()
+    for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3 + 1] === PALETTE[C.CLAY] || cells[i * 3 + 2] === PALETTE[C.CLAY]) rows.add(Math.floor(i / at.cols))
+    return rows
+  }
+  const held = blits[blits.length - 1]
+  expect(clayRows(held).has(at.rows - 1)).toBe(false) // lifted clear of its strip's last row
+  await (ui as any).pointer({ type: 'up', x: at.body + 13, y: 0, button: 'left' } as any)
+  await clock.advance(3000)
+  expect(clayRows(blits[blits.length - 1]).has(at.rows - 1)).toBe(true) // back on its feet
+  await ui.unmount()
+})
+
+test('a pointer rubbing back and forth over it pets it', async ($, on) => {
+  const clock = world(on)
+  const blits = await startTerm($, clock, on)
+  const ui = await $.ui.mount(term())
+  const at = await critterAt(ui)
+  for (let i = 0; i < 8; i++) {
+    await (ui as any).pointer({ type: 'move', x: at.body + (i % 2 ? 5 : 1), y: at.rows - 2 } as any)
+    await clock.advance(40)
+  }
+  await clock.advance(250)
+  expect(blits.some(b => hasColor(cellsOf(b.cells), PALETTE[C.ROSE]!))).toBe(true)
+  await ui.unmount()
+})
+
 test('/critter size 2 makes a bigger critter', async ($, on) => {
   const clock = world(on)
   await startTerm($, clock, on)

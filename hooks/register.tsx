@@ -289,6 +289,7 @@ function actFor(tool: string): CritterAct {
 // ---- The terminal: no backdrop there, so the critter walks a strip above the prompt, drawn in half blocks.
 const STRIP_KEY = 'desk-critter'
 const TICK_MS = 125
+const LIVELY_TICK_MS = 50 // held or flying, it follows the pointer and falls smoothly
 const SLEEP_TICK_MS = 1000 // asleep, only its z's move
 const CAPTION_GAP = 2
 const SIZE_MIN = 1
@@ -379,11 +380,16 @@ async function readScene($: EngineInterface, now: number, laneCols: number): Pro
 const captionOf = (sc: Scene, shown = sc.size) =>
   `critter Lv ${sc.level} · ${walker.sleeping ? 'asleep' : sc.idle}${shown !== sc.size ? ` · size ${shown}` : ''}`
 
-/** What the walk needs to know of a look: its speed, its width, and how far its props reach when it faces left. */
-const fit = (look: Look) => ({
+/**
+ * What the walk needs to know of a look in a strip of `rows`: its speed, its width, how far its props
+ * reach when it faces left, where its middle is, and how high it can be lifted and still show.
+ */
+const fit = (look: Look, rows: number) => ({
   scale: look.scale,
   sprite: spriteCols(look),
   reach: Math.ceil((look.art.w - 2 * look.art.mid) * look.scale),
+  center: look.art.mid * look.scale,
+  headroom: Math.max(0, (rows * 2) / look.scale - look.art.bodyPx),
 })
 
 const toBase64 = (bytes: Uint8Array) => (bytes as unknown as { toBase64: () => string }).toBase64()
@@ -392,7 +398,7 @@ const toBase64 = (bytes: Uint8Array) => (bytes as unknown as { toBase64: () => s
 function frameOf(sc: Scene, rows: number, look: Look, pic: boolean): { data: string; width: number; height: number } {
   const pose = walker.pose(sc.input, sc.act, sc.feel, sc.asking, sc.hat)
   if (pic) {
-    const { rgba, width, height } = picture(look.paint(pose), sc.input.laneCols, rows, walker.x, walker.facing < 0, look.scale, look.art)
+    const { rgba, width, height } = picture(look, pose, sc.input.laneCols, rows, walker.x, walker.facing < 0)
     return { data: toBase64(rgba), width, height }
   }
   const cells = render(look, pose, sc.input.laneCols, rows, walker.x, walker.facing < 0)
@@ -423,7 +429,7 @@ function stopTick() {
 /** Tick fast while it is awake, slowly while it sleeps, not at all with no strip. */
 function pace($: EngineInterface) {
   if (strip === null) return stopTick()
-  const want = walker.sleeping ? SLEEP_TICK_MS : TICK_MS
+  const want = walker.sleeping ? SLEEP_TICK_MS : walker.lively ? LIVELY_TICK_MS : TICK_MS
   if (tickTimer !== undefined && tickEvery === want) return
   tickTimer?.cancel()
   tickEvery = want
@@ -434,7 +440,7 @@ async function tick($: EngineInterface) {
   const now = strip
   if (now === null) return stopTick()
   const base = await sceneNow($, now.laneCols)
-  const sc = { ...base, input: { ...base.input, ...fit(now.look) } }
+  const sc = { ...base, input: { ...base.input, ...fit(now.look, now.rows) } }
   walker.step(sc.input)
   if (captionOf(sc, now.shown) !== now.caption || sc.size !== now.size) {
     // The caption and the size set the layout, so a change to either is a new render rather than a blit.
@@ -465,17 +471,35 @@ async function wake($: EngineInterface) {
   pace($)
 }
 
-/** A click in the strip, by strip column: on the critter, it gets petted. */
-async function touched($: EngineInterface, x: number): Promise<boolean> {
+/** The pointer over the strip, from touch.tsx: `x` its column and `y` its row there, with fractions where known. */
+type Touch = { t: 'down' | 'move' | 'up' | 'leave'; x: number; y: number; held?: boolean }
+
+/**
+ * The pointer over the strip. A press on the critter pets it, and drags it about if the pointer moves;
+ * let go, it is thrown. With no button down its eyes follow the pointer, and a rub back and forth pets it.
+ */
+async function touched($: EngineInterface, m: Touch): Promise<boolean> {
   if (strip === null) return false
-  // The body's columns in its painting, the same either way it faces.
+  const now = await $.clock.now()
   const { art, scale } = strip.look
-  const at = (x - strip.laneLeft - walker.x) / scale
-  if (at < art.bodyFrom - 1 || at > art.bodyTo + 1) return false
-  cached = null
-  walker.pet(await $.clock.now())
+  // Lane column, and pixels above the ground; the strip's bottom row is the ground.
+  const col = m.x - strip.laneLeft
+  const up = ((strip.rows - m.y) * 2) / scale
+  // On its body, the same either way it faces, from its feet to a little over its head.
+  const at = (Math.floor(m.x) - strip.laneLeft - walker.x) / scale
+  const onBody = at >= art.bodyFrom - 1 && at <= art.bodyTo + 1 && up - walker.air <= art.bodyPx + 3
+  let hit = false
+  // A post can replace one the frame has not delivered: a lost press or release shows in `held`.
+  if (m.t === 'move' && m.held && !walker.isPressed) hit = walker.press(now, col, up, onBody)
+  if (m.t === 'move' && !m.held && walker.isPressed) walker.release(now)
+  if (m.t === 'down') hit = walker.press(now, col, up, onBody)
+  else if (m.t === 'move' && m.held) walker.drag(now, col, up)
+  else if (m.t === 'move') hit = walker.hover(now, col, up, onBody)
+  else if (m.t === 'up') walker.release(now)
+  else walker.unhover()
+  if (hit) cached = null
   pace($)
-  return true
+  return hit
 }
 
 /** About how many terminal rows a rendered tree takes. */
@@ -662,7 +686,7 @@ export const register: Register = on => {
       const { shown, look, caption, captionCols, laneLeft, laneCols } = pick
       if (room >= bodyRows(look)) {
         const rows = Math.min(stripRows(look), room)
-        const sc = { ...probe, input: { ...probe.input, laneCols, ...fit(look) } }
+        const sc = { ...probe, input: { ...probe.input, laneCols, ...fit(look, rows) } }
         walker.settle(sc.input) // keeps x inside a lane that may have just shrunk
         strip = { requestId: e.requestId, laneLeft, laneCols, rows, look, shown, size: probe.size, caption, pic }
         const frame = frameOf(sc, rows, look, pic)
@@ -708,8 +732,9 @@ export const register: Register = on => {
   // A click on the strip, from touch.tsx.
   on('ui.message', async ($, e, next) => {
     if ((e as any).element !== 'touch') return next(e)
-    const x = Number(((e as any).data as { x?: unknown } | null)?.x)
-    if (Number.isFinite(x)) await touched($, x)
+    const d = ((e as any).data ?? {}) as Partial<Touch>
+    const m: Touch = { t: d.t ?? 'down', x: Number(d.x), y: Number(d.y), held: d.held === true }
+    if (Number.isFinite(m.x) && Number.isFinite(m.y)) await touched($, m)
     return {} as any
   })
 

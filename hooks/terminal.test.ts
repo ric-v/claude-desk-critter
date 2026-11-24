@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { ART, C, MINI, PALETTE, paint, paintMini } from './critter-art'
 import type { Pose } from './critter-art'
-import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, renderGrid, spriteCols, stripRows } from './terminal'
+import { BODY_ROWS, DEFAULT_COLOR, PICTURE_SIZES, SIZES, SPRITE_COLS, STRIP_ROWS, Walker, bodyRows, encode, picture, render, renderGrid, spriteCols, stripRows } from './terminal'
 import type { WalkInput } from './terminal'
 
 const IDLE: Pose = { stride: 0, dancing: false, eyes: 'open', arm: 'rest', hop: 0, prop: 'none', hat: 0, t: 0 }
@@ -173,32 +173,236 @@ test('no drawn cell ever takes the terminal text colour', () => {
 
 const rgbaAt = (pic: { rgba: Uint8Array; width: number }, u: number, v: number) => Array.from(pic.rgba.slice((v * pic.width + u) * 4, (v * pic.width + u) * 4 + 4))
 const clayRGBA = [(PALETTE[C.CLAY]! >> 16) & 255, (PALETTE[C.CLAY]! >> 8) & 255, PALETTE[C.CLAY]! & 255, 255]
+const MINI1 = SIZES[0]!
+const ROWS1 = stripRows(MINI1)
+// Image pixels whose colour is exactly the clay: the flat middle of its body.
+const clayPixels = (pic: { rgba: Uint8Array; width: number; height: number }) => {
+  const at: [number, number][] = []
+  for (let v = 0; v < pic.height; v++) for (let u = 0; u < pic.width; u++) if (rgbaAt(pic, u, v).join() === clayRGBA.join()) at.push([u, v])
+  return at
+}
 
-test('a picture draws each pixel as a square block, clear where nothing is painted', () => {
-  const px = new Uint8Array(ART.w * ART.h)
-  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY // one pixel on the bottom row
-  const pic = picture(px, 40, STRIP_ROWS, 0, false)
-  expect([pic.width, pic.height]).toEqual([40 * 3, ART.h * 3])
-  const u = (0 - ART.col0) * 3
-  expect(rgbaAt(pic, u, pic.height - 1)).toEqual(clayRGBA)
-  expect(rgbaAt(pic, u + 2, pic.height - 3)).toEqual(clayRGBA)
-  expect(rgbaAt(pic, u + 3, pic.height - 1)).toEqual([0, 0, 0, 0])
-  expect(rgbaAt(pic, u, pic.height - 4)).toEqual([0, 0, 0, 0])
+test('a picture draws each painted pixel as a block of four, clear where nothing is painted', () => {
+  const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  expect([pic.width, pic.height]).toEqual([40 * 4, MINI.h * 4])
+  expect(rgbaAt(pic, 0, 0)).toEqual([0, 0, 0, 0])
+  // the middle of its body, painted pixel (5, 2) of the mini grid: the same clay all through the block
+  const u = (5 - MINI.col0) * 4
+  const v = (2 - MINI.row0) * 4
+  for (let d = 0; d < 4; d++) expect(rgbaAt(pic, u + d, v + d)).toEqual(clayRGBA)
 })
 
-test('a picture walks and turns like the text critter', () => {
-  const px = new Uint8Array(ART.w * ART.h)
-  px[(ART.h - 1) * ART.w + (0 - ART.col0)] = C.CLAY
-  const moved = picture(px, 40, STRIP_ROWS, 5, false)
-  expect(rgbaAt(moved, (5 - ART.col0) * 3, moved.height - 1)).toEqual(clayRGBA)
-  const flipped = picture(px, 40, STRIP_ROWS, 0, true)
-  expect(rgbaAt(flipped, (2 * ART.mid - 1 - (0 - ART.col0)) * 3, flipped.height - 1)).toEqual(clayRGBA)
+test('a picture is lit from the top left: a lighter edge there, a darker one at the lower right', () => {
+  const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  const lum = (u: number, v: number) => rgbaAt(pic, u, v).slice(0, 3).reduce((a, b) => a + b, 0)
+  const top = (0 - MINI.row0) * 4 // the body's top row, painted row 0
+  const mid = (5 - MINI.col0) * 4
+  expect(lum(mid, top)).toBeGreaterThan(lum(mid, top + 10))
+  const rightEdge = (10 - MINI.col0) * 4 - 1 // the body's last image column, painted column 9
+  expect(lum(rightEdge, top + 18)).toBeLessThan(lum(mid, top + 10))
 })
 
-test('a picture never passes the image size limit', () => {
-  const pic = picture(paint(IDLE), 512, STRIP_ROWS, 0, false, 13 / 18)
-  expect(pic.width).toBeLessThanOrEqual(2048)
-  expect(pic.rgba.length).toBe(pic.width * pic.height * 4)
+test('a picture keeps its light on the screen when the critter turns', () => {
+  for (const flip of [false, true]) {
+    const pic = picture(MINI1, IDLE, 40, ROWS1, 0, flip)
+    const v = (4 - MINI.row0) * 4 + 3 // a row through its body, below its eyes, arms and their side faces
+    const lum = (u: number) => rgbaAt(pic, u, v).slice(0, 3).reduce((a, b) => a + b, 0)
+    const solid: number[] = []
+    for (let u = 0; u < pic.width; u++) if (rgbaAt(pic, u, v)[3] === 255) solid.push(u)
+    // lit on its left edge, in shadow on its right, whichever way it faces
+    expect([flip, lum(solid[0]!) > lum(solid[solid.length - 1]!)]).toEqual([flip, true])
+    expect([flip, lum(solid[0]!) > lum(solid[Math.floor(solid.length / 2)]!)]).toEqual([flip, true])
+  }
+})
+
+test('a picture shows a side face and a glint in each open eye', () => {
+  const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  const all = new Set<string>()
+  for (let i = 0; i < pic.width * pic.height; i++) all.add(Array.from(pic.rgba.slice(i * 4, i * 4 + 4)).join())
+  const paper = [(PALETTE[C.PAPER]! >> 16) & 255, (PALETTE[C.PAPER]! >> 8) & 255, PALETTE[C.PAPER]! & 255, 255].join()
+  expect(all.has(paper)).toBe(true)
+  const shut = picture(MINI1, { ...IDLE, eyes: 'shut' }, 40, ROWS1, 0, false)
+  const any = (p: typeof pic) => p.rgba.some((_, i) => i % 4 === 0 && [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2], p.rgba[i + 3]].join() === paper)
+  expect(any(shut)).toBe(false)
+})
+
+test('its shadow is soft: see-through, never a flat grey', () => {
+  const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  const v = pic.height - 1
+  const alphas = new Set<number>()
+  for (let u = 0; u < pic.width; u++) {
+    const [r, g, b, a] = rgbaAt(pic, u, v)
+    if (a! > 0 && r === 0 && g === 0 && b === 0) alphas.add(a!)
+  }
+  expect(alphas.size).toBeGreaterThan(1)
+  for (const a of alphas) expect(a).toBeLessThan(255)
+})
+
+test('a picture walks by a fraction of a pixel, and turns about its body', () => {
+  const base = clayPixels(picture(MINI1, IDLE, 40, ROWS1, 0, false))
+  const moved = clayPixels(picture(MINI1, IDLE, 40, ROWS1, 0.5, false))
+  expect(moved[0]![0] - base[0]![0]).toBe(2)
+  const flipped = clayPixels(picture(MINI1, IDLE, 40, ROWS1, 0, true))
+  const span = (ps: [number, number][]) => [Math.min(...ps.map(p => p[0])), Math.max(...ps.map(p => p[0]))]
+  expect(Math.abs(span(flipped)[0]! - span(base)[0]!)).toBeLessThanOrEqual(4)
+})
+
+test('a picture never passes the image size limit, and stays small on a wide lane', () => {
+  for (const look of SIZES) {
+    const pic = picture(look, IDLE, 512, stripRows(look), 0, false)
+    expect(pic.width).toBeLessThanOrEqual(2048)
+    expect(pic.width * pic.height).toBeLessThanOrEqual(48_000 * 1.2)
+    expect(pic.rgba.length).toBe(pic.width * pic.height * 4)
+  }
+})
+
+test('lifted, a picture rises by image pixels and its shadow shrinks', () => {
+  const ground = (pic: { rgba: Uint8Array; width: number; height: number }) => {
+    let n = 0
+    for (let u = 0; u < pic.width; u++) if (rgbaAt(pic, u, pic.height - 1)[3]! > 0) n++
+    return n
+  }
+  const low = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  const high = picture(MINI1, { ...IDLE, air: 4.5 }, 40, ROWS1, 0, false)
+  expect(clayPixels(low)[0]![1] - clayPixels(high)[0]![1]).toBe(18)
+  expect(ground(high)).toBeLessThan(ground(low))
+})
+
+test('the text critter is lit too, with a flat clay middle', () => {
+  const cells = render(MINI1, IDLE, 40, ROWS1, 0, false)
+  const colors = new Set<number>()
+  for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) colors.add(cells[i * 3 + 1]!)
+  expect(colors.has(PALETTE[C.CLAY]!)).toBe(true)
+  expect([...colors].filter(c => c !== DEFAULT_COLOR && !PALETTE.includes(c)).length).toBeGreaterThan(0)
+  for (let i = 0; i < cells.length / 3; i++) if (cells[i * 3] !== 0x20) expect(cells[i * 3 + 1]).not.toBe(DEFAULT_COLOR)
+})
+
+// The pointer, in lane columns and pixels above the ground.
+const LIVE: WalkInput = { ...IN, sprite: 32, center: 10, headroom: 6 }
+
+test('a tap pets it; it is only picked up once the pointer moves', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  expect(w.press(IN.now, 30, 2, true)).toBe(true)
+  expect(w.pose(LIVE, 'none', 0, false, 0).prop).toBe('hearts')
+  w.drag(IN.now + 20, 30.4, 2.3)
+  expect(w.mode).toBe('ground')
+  w.release(IN.now + 60)
+  expect([w.mode, w.x]).toEqual(['ground', 20])
+  expect(w.press(IN.now, 5, 2, false)).toBe(false)
+})
+
+test('dragged, it follows the pointer up off the ground, arms up and legs kicking', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  w.press(IN.now, 30, 2, true)
+  w.drag(IN.now + 50, 36, 5)
+  expect(w.mode).toBe('held')
+  expect(w.x).toBe(26)
+  expect(w.air).toBeGreaterThan(3)
+  const pose = w.pose({ ...LIVE, now: IN.now + 60 }, 'type', 0, false, 0)
+  expect([pose.held, pose.prop, pose.hop]).toEqual([true, 'none', 0])
+  for (let i = 0; i < 10; i++) w.step({ ...LIVE, now: IN.now + 100 + i * 50 })
+  expect(w.x).toBe(26) // held, it does not walk off
+})
+
+test('thrown, it flies, falls, bounces and lands; a hard landing leaves it dizzy', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  w.press(IN.now, 30, 2, true)
+  w.drag(IN.now + 20, 32, 4)
+  w.drag(IN.now + 60, 40, 9)
+  w.drag(IN.now + 100, 48, 10)
+  w.release(IN.now + 100)
+  expect(w.mode).toBe('flying')
+  let t = IN.now + 100
+  let landed = false
+  let dizzy = false
+  for (let i = 0; i < 80 && !landed; i++) {
+    t += 50
+    w.step({ ...LIVE, now: t })
+    if (w.pose({ ...LIVE, now: t }, 'none', 0, false, 0).dizzy) dizzy = true
+    landed = w.mode === 'ground' && !w.lively
+  }
+  expect(landed).toBe(true)
+  expect(w.air).toBe(0)
+  expect(w.x).toBeGreaterThan(38) // it carried on the way it was thrown
+  expect(w.x).toBeLessThanOrEqual(80 - 32)
+  expect(dizzy).toBe(true)
+})
+
+test('dropped gently, it lands without seeing stars', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  w.press(IN.now, 30, 2, true)
+  w.drag(IN.now + 200, 30, 4)
+  w.drag(IN.now + 400, 30, 4)
+  w.release(IN.now + 400)
+  let t = IN.now + 400
+  for (let i = 0; i < 40; i++) {
+    t += 50
+    w.step({ ...LIVE, now: t })
+    expect(w.pose({ ...LIVE, now: t }, 'none', 0, false, 0).dizzy).toBe(false)
+  }
+  expect([w.mode, w.air]).toEqual(['ground', 0])
+})
+
+test('thrown at the end of the lane, it bounces back off it', () => {
+  const w = new Walker(1)
+  w.x = 10
+  w.settle(LIVE)
+  w.press(IN.now, 20, 2, true)
+  w.drag(IN.now + 50, 30, 3)
+  w.drag(IN.now + 100, 45, 4)
+  w.release(IN.now + 100)
+  let t = IN.now + 100
+  let hit = false
+  for (let i = 0; i < 60; i++) {
+    t += 50
+    w.step({ ...LIVE, now: t })
+    if (w.x >= 48) hit = true
+  }
+  expect(hit).toBe(true)
+  expect(w.x).toBeLessThan(48)
+})
+
+test('its eyes follow the pointer, and up when the pointer is over its head', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  w.hover(IN.now, 60, 1, false)
+  expect(w.pose(LIVE, 'none', 0, false, 0).look).toEqual([w.facing, 0])
+  w.hover(IN.now, 0, 12, false)
+  expect(w.pose(LIVE, 'none', 0, false, 0).look).toEqual([-w.facing, -1])
+  w.hover(IN.now, 30, 2, true)
+  expect(w.pose(LIVE, 'none', 0, false, 0).look).toEqual([0, 0])
+  w.unhover()
+  expect(w.pose(LIVE, 'none', 0, false, 0).look).toBeUndefined()
+})
+
+test('rubbed back and forth, it is petted', () => {
+  const w = new Walker(1)
+  w.x = 20
+  w.settle(LIVE)
+  const cols = [28, 31, 28, 31, 28]
+  const pets = cols.map((c, i) => w.hover(IN.now + i * 100, c, 3, true))
+  expect(pets.slice(0, 3)).toEqual([false, false, false])
+  expect(pets.includes(true)).toBe(true)
+  expect(w.pose({ ...LIVE, now: IN.now + 500 }, 'none', 0, false, 0).prop).toBe('hearts')
+})
+
+test('resting the pointer on it stops its walk', () => {
+  const w = new Walker(1)
+  w.x = 20
+  for (let i = 0; i < 40; i++) {
+    w.hover(IN.now + i * 125, 30, 3, true)
+    w.step({ ...LIVE, now: IN.now + i * 125 })
+  }
+  expect(w.x).toBe(20)
 })
 
 test('a picture draws the same critter as the text', () => {
