@@ -242,7 +242,7 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
   const goLeft = pos.x < (b.x + b.z) * 0.5 ? 1 : 0
   const sideX = goLeft > 0.5 ? b.x : b.z
   const floorDir = sideX < pos.x ? -1 : 1
-  const floorStep = min(abs(sideX - pos.x), dt * SPEED * 1.5 * calm) * floorDir
+  const floorStep = min(abs(sideX - pos.x), dt * SPEED * 3 * calm) * floorDir
   const floorX = pos.x + floorStep
   const reached = step(abs(sideX - floorX), 1.5)
 
@@ -286,7 +286,8 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
 
   const nextPos =
     picked > 0.5 ? heldFeet
-    : m1 > 0.5 ? heldFeet
+    // Let go, no pointer carries it any more (carrier reads 0, 0), so it drops from where it hung.
+    : m1 > 0.5 ? (dropped > 0.5 ? pos : heldFeet)
     : m2 > 0.5 ? fp
     : m3 > 0.5 ? vec2(floorX, 0)
     : feet
@@ -299,7 +300,7 @@ const state: Buffer = buffer({ size: [3, 1], float: 32, filter: 'nearest' }, p =
 
   const moved = abs(pathMove) * m0 + abs(floorStep) * m3
   const nextWalked = mod(walked + moved, 1000)
-  const nextRub = clamp(rub * exp(-dt * 0.9) + stroke * dt * 2.2 + tapped * 0.8, 0, 1.5)
+  const nextRub = clamp(rub * exp(-dt * 0.9) + stroke * dt * 2.2 + tapped * 1.4, 0, 1.5)
   const nextDizzy = max(knock * m2 * 2.5, max(dizzy - dt, 0))
 
   const t0 = vec4(nextD, nextRub, nextWalked, nextDir)
