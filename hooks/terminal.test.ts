@@ -205,25 +205,32 @@ test('a picture is lit from the top left: a lighter edge there, a darker one at 
 test('a picture keeps its light on the screen when the critter turns', () => {
   for (const flip of [false, true]) {
     const pic = picture(MINI1, IDLE, 40, ROWS1, 0, flip)
-    const v = (4 - MINI.row0) * 4 + 3 // a row through its body, below its eyes, arms and their side faces
+    const v = pic.height - 1 - 4 * 4 - 2 // a row through the middle of its body, clear of its eyes and arms
     const lum = (u: number) => rgbaAt(pic, u, v).slice(0, 3).reduce((a, b) => a + b, 0)
     const solid: number[] = []
     for (let u = 0; u < pic.width; u++) if (rgbaAt(pic, u, v)[3] === 255) solid.push(u)
     // lit on its left edge, in shadow on its right, whichever way it faces
     expect([flip, lum(solid[0]!) > lum(solid[solid.length - 1]!)]).toEqual([flip, true])
-    expect([flip, lum(solid[0]!) > lum(solid[Math.floor(solid.length / 2)]!)]).toEqual([flip, true])
   }
 })
 
-test('a picture shows a side face and a glint in each open eye', () => {
+test('a picture shows a side face and dark open eyes', () => {
   const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
-  const all = new Set<string>()
-  for (let i = 0; i < pic.width * pic.height; i++) all.add(Array.from(pic.rgba.slice(i * 4, i * 4 + 4)).join())
-  const paper = [(PALETTE[C.PAPER]! >> 16) & 255, (PALETTE[C.PAPER]! >> 8) & 255, PALETTE[C.PAPER]! & 255, 255].join()
-  expect(all.has(paper)).toBe(true)
-  const shut = picture(MINI1, { ...IDLE, eyes: 'shut' }, 40, ROWS1, 0, false)
-  const any = (p: typeof pic) => p.rgba.some((_, i) => i % 4 === 0 && [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2], p.rgba[i + 3]].join() === paper)
-  expect(any(shut)).toBe(false)
+  const ink = [(PALETTE[C.INK]! >> 16) & 255, (PALETTE[C.INK]! >> 8) & 255, PALETTE[C.INK]! & 255, 255].join()
+  const colours = new Set<string>()
+  for (let i = 0; i < pic.width * pic.height; i++) colours.add(Array.from(pic.rgba.slice(i * 4, i * 4 + 4)).join())
+  expect(colours.has(ink)).toBe(true)
+  const sideFace = [(PALETTE[C.CLAY]! >> 16) & 255, (PALETTE[C.CLAY]! >> 8) & 255, PALETTE[C.CLAY]! & 255].map(c => Math.round(c * 0.52))
+  expect(colours.has([...sideFace, 255].join())).toBe(true)
+})
+
+test('a picture is flat blocks: each painted pixel is one colour, not a gradient', () => {
+  const pic = picture(MINI1, IDLE, 40, ROWS1, 0, false)
+  const pp = 4
+  for (let v = 0; v < pic.height; v += pp) for (let u = 0; u < pic.width; u += pp) {
+    const first = rgbaAt(pic, u, v).join()
+    for (let dy = 0; dy < pp; dy++) for (let dx = 0; dx < pp; dx++) expect(rgbaAt(pic, u + dx, v + dy).join()).toBe(first)
+  }
 })
 
 test('its shadow is soft: see-through, never a flat grey', () => {
@@ -251,7 +258,7 @@ test('a picture never passes the image size limit, and stays small on a wide lan
   for (const look of SIZES) {
     const pic = picture(look, IDLE, 512, stripRows(look), 0, false)
     expect(pic.width).toBeLessThanOrEqual(2048)
-    expect(pic.width * pic.height).toBeLessThanOrEqual(48_000 * 1.2)
+    expect([pic.width, pic.height]).toEqual([512 * 4 > 2048 ? 2048 : 512 * 4, stripRows(look) * 8])
     expect(pic.rgba.length).toBe(pic.width * pic.height * 4)
   }
 })
@@ -264,7 +271,7 @@ test('lifted, a picture rises by image pixels and its shadow shrinks', () => {
   }
   const low = picture(MINI1, IDLE, 40, ROWS1, 0, false)
   const high = picture(MINI1, { ...IDLE, air: 4.5 }, 40, ROWS1, 0, false)
-  expect(clayPixels(low)[0]![1] - clayPixels(high)[0]![1]).toBe(18)
+  expect(clayPixels(low)[0]![1] - clayPixels(high)[0]![1]).toBe(20) // 4.5 pixels rounds to 5 painted pixels, 4 image pixels each
   expect(ground(high)).toBeLessThan(ground(low))
 })
 

@@ -30,8 +30,6 @@ const SIDE = 0.52
 const SHADOW_ALPHA = 0.42
 
 export type LightOptions = {
-  /** A glint in each eye; for open eyes, drawn big enough to hold one. */
-  glint?: boolean
   /** The side face, pushed this many painted pixels to the lower right; 0 for none. */
   depth?: number
   /** The ground shadow as a see-through ellipse rather than a flat grey. */
@@ -144,12 +142,5 @@ export function light(g: Uint8Array, w: number, h: number, per: number, opts: Li
     }
   }
 
-  // A glint in each eye, at its corner toward the light.
-  if (opts.glint && per >= 3) {
-    const eye = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && body[y * w + x] === 2
-    for (let y = 0; y < h; y++)
-      for (let x = 0; x < w; x++)
-        if (eye(x, y) && !eye(x - 1, y) && !eye(x, y - 1) && eye(x + 1, y + 1) && eye(x + per - 1, y + per - 1)) rgb[(y + 1) * w + x + 1] = PALETTE[C.PAPER]!
-  }
   return { rgb, alpha }
 }

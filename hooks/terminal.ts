@@ -139,7 +139,6 @@ export function renderGrid(look: Look, pose: Pose, laneCols: number, rows: numbe
 
 /** The side face shows from size 2 up; smaller, a pixel of it would cover too much. */
 const depthAt = (per: number) => (per >= 2 ? 0.5 : 0)
-const glints = (pose: Pose) => pose.eyes === 'open' || pose.eyes === 'lidded'
 
 /** A pose drawn for the terminal, as Raster cells, lit: bevelled, with a side face from size 2. */
 export function render(look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): Uint32Array {
@@ -150,54 +149,64 @@ export function render(look: Look, pose: Pose, laneCols: number, rows: number, x
   return cellsFrom(colors, laneCols, rows)
 }
 
-/** Image pixels to a painted pixel at most; fewer when the lane is wide, so a frame stays small. */
-const PICTURE_PX = 4
-const PICTURE_MAX = 2048
-const PICTURE_BUDGET = 48_000
+/** Image pixels per terminal cell: the picture is exactly the lane's size, so the terminal never resamples it. */
+export const CELL_PX_X = 4
+export const CELL_PX_Y = 8
 
 /**
- * A pose as RGBA for an Image over the whole lane, lit: a smooth bevel, a gloss, glinting eyes, a
- * side face and a soft shadow, clear where nothing is painted. Each painted pixel is a block of
- * image pixels, so the critter moves, hops and falls by a fraction of a pixel. The terminal
- * stretches it over `laneCols` x `rows`.
+ * A pose as RGBA for an Image over the whole lane. The picture is the lane's exact size in pixels, so
+ * the terminal shows it without resampling; each painted pixel is one flat square block of
+ * `scale * 4` image pixels, lit at painted resolution, so every pixel stays crisp. Clear where nothing
+ * is painted. The bottom of the picture is the ground, so a hop or fall moves the critter by whole
+ * painted pixels.
  */
 export function picture(look: Look, pose: Pose, laneCols: number, rows: number, x: number, flip: boolean): { rgba: Uint8Array; width: number; height: number } {
   const { art, scale } = look
-  const across = Math.max(1, Math.round(laneCols / scale))
-  const down = Math.max(1, Math.round((rows * 2) / scale))
-  const k = Math.max(1, Math.min(PICTURE_PX, Math.floor(PICTURE_MAX / across), Math.floor(Math.sqrt(PICTURE_BUDGET / (across * down)))))
-  const width = across * k
-  const height = down * k
-  const left = Math.round((x / scale) * k)
-  const g = new Uint8Array(width * height)
-  const lay = (px: Uint8Array, up: number) => {
-    for (let v = 0; v < height; v++) {
-      const sy = art.h - down + Math.floor((v + up) / k)
-      if (sy < 0 || sy >= art.h) continue
-      for (let u = 0; u < width; u++) {
-        const rel = (u - left + 0.5) / k
-        const sx = Math.floor(flip ? 2 * art.mid - rel : rel)
-        if (sx < 0 || sx >= art.w) continue
-        const p = px[sy * art.w + sx]!
-        if (p !== 0) g[v * width + u] = p
+  const width = Math.max(1, laneCols) * CELL_PX_X
+  const height = Math.max(1, rows) * CELL_PX_Y
+  const pp = Math.max(1, Math.round(scale * CELL_PX_X)) // a painted pixel, square
+  const left = Math.round(x * CELL_PX_X)
+  // The painted blocks the picture covers: block `i0 + c` for column c, block `ny - 1 - r` up from the ground for row r.
+  const i0 = Math.floor(-left / pp)
+  const nx = Math.floor((width - 1 - left) / pp) - i0 + 1
+  const ny = Math.floor((height - 1) / pp) + 1
+  const mirror = Math.round(2 * art.mid) - 1
+  const g = new Uint8Array(nx * ny)
+  const lifted = look.lift === undefined ? 0 : Math.round(look.lift(pose))
+  const ground = look.lift === undefined ? look.paint(pose) : look.paint(pose, 'ground')
+  const body = look.lift === undefined ? null : look.paint(pose, 'body')
+  const at = (px: Uint8Array, sx: number, sy: number) => (sx < 0 || sx >= art.w || sy < 0 || sy >= art.h ? 0 : px[sy * art.w + sx]!)
+  for (let r = 0; r < ny; r++) {
+    const up = ny - 1 - r
+    for (let c = 0; c < nx; c++) {
+      const pi = c + i0
+      const sx = flip ? mirror - pi : pi
+      let v = at(ground, sx, art.h - 1 - up)
+      if (body !== null) {
+        const b = at(body, sx, art.h - 1 - (up - lifted))
+        if (b !== 0) v = b
       }
+      g[r * nx + c] = v
     }
   }
-  if (look.lift === undefined) lay(look.paint(pose), 0)
-  else {
-    lay(look.paint(pose, 'ground'), 0)
-    lay(look.paint(pose, 'body'), Math.round(look.lift(pose) * k))
-  }
-  const lit = light(g, width, height, k, { glint: glints(pose), depth: 0.5, soft: true })
+  const lit = light(g, nx, ny, 1, { depth: 1, soft: true })
   const rgba = new Uint8Array(width * height * 4)
-  for (let i = 0; i < width * height; i++) {
-    const a = lit.alpha[i]!
-    if (a === 0) continue
-    const c = lit.rgb[i]!
-    rgba[i * 4] = (c >> 16) & 255
-    rgba[i * 4 + 1] = (c >> 8) & 255
-    rgba[i * 4 + 2] = c & 255
-    rgba[i * 4 + 3] = a
+  for (let v = 0; v < height; v++) {
+    const up = Math.floor((height - 1 - v) / pp)
+    const r = ny - 1 - up
+    for (let u = 0; u < width; u++) {
+      const c = Math.floor((u - left) / pp) - i0
+      if (r < 0 || c < 0 || c >= nx) continue
+      const k = r * nx + c
+      const a = lit.alpha[k]!
+      if (a === 0) continue
+      const col = lit.rgb[k]!
+      const o = (v * width + u) * 4
+      rgba[o] = (col >> 16) & 255
+      rgba[o + 1] = (col >> 8) & 255
+      rgba[o + 2] = col & 255
+      rgba[o + 3] = a
+    }
   }
   return { rgba, width, height }
 }
